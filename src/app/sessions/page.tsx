@@ -1,18 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import {
   AgentRow,
@@ -23,7 +14,6 @@ import {
 } from "@/lib/api";
 
 const POLL_INTERVAL_MS = 5000;
-const ID_TRUNCATE_LIMIT = 22;
 const ALL_FILTER = "__all__";
 
 function statusDotClass(status: string): string {
@@ -41,29 +31,20 @@ function statusDotClass(status: string): string {
   }
 }
 
-function truncateId(id: string): string {
-  if (id.length <= ID_TRUNCATE_LIMIT) return id;
-  return `${id.slice(0, ID_TRUNCATE_LIMIT)}…`;
-}
-
 function formatRelative(iso?: string | null): string {
   if (!iso) return "—";
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return iso;
-  const diffMs = Date.now() - then;
-  if (diffMs < 0) return "just now";
-  const sec = Math.floor(diffMs / 1000);
+  const diff = Date.now() - then;
+  if (diff < 0) return "just now";
+  const sec = Math.floor(diff / 1000);
   if (sec < 60) return `${sec}s ago`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m ago`;
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
-  const mon = Math.floor(day / 30);
-  if (mon < 12) return `${mon}mo ago`;
-  const yr = Math.floor(day / 365);
-  return `${yr}y ago`;
+  return `${day}d ago`;
 }
 
 export default function SessionsListPage() {
@@ -84,8 +65,7 @@ export default function SessionsListPage() {
       setSessions(sessionsRes);
       setAgents(agentsRes);
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setError(msg);
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -96,17 +76,13 @@ export default function SessionsListPage() {
     const id = window.setInterval(() => {
       void load();
     }, POLL_INTERVAL_MS);
-    return () => {
-      window.clearInterval(id);
-    };
+    return () => window.clearInterval(id);
   }, [load]);
 
   const agentNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const a of agents) {
-      map.set(a.id, a.name ?? a.id);
-    }
-    return map;
+    const m = new Map<string, string>();
+    for (const a of agents) m.set(a.id, a.name?.trim() || a.id);
+    return m;
   }, [agents]);
 
   const agentChips = useMemo(() => {
@@ -127,38 +103,30 @@ export default function SessionsListPage() {
   }, [sessions, activeFilter]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8">
-      <header className="flex items-center justify-between">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-[22px] font-semibold tracking-tight">Sessions</h1>
-          <p className="text-sm tabular-nums text-muted-foreground">
-            {sessions.length}
+    <div className="mx-auto w-full max-w-4xl px-6 py-10">
+      <header className="flex items-baseline justify-between">
+        <div>
+          <h1 className="text-[26px] font-semibold tracking-tight leading-none">
+            Sessions
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {sessions.length} {sessions.length === 1 ? "session" : "sessions"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void load()}
-            disabled={loading}
-            aria-label="Refresh sessions"
-          >
-            <RefreshCw className={loading ? "animate-spin" : ""} aria-hidden />
-            Refresh
-          </Button>
-          <Link
-            href="/sessions/new"
-            aria-label="Create a new session"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          >
-            <Plus className="size-4" aria-hidden />
-            New Session
-          </Link>
-        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void load()}
+          disabled={loading}
+          aria-label="Refresh"
+          className="h-8 px-2 text-muted-foreground hover:text-foreground"
+        >
+          <RefreshCw className={loading ? "size-3.5 animate-spin" : "size-3.5"} />
+        </Button>
       </header>
 
       {agentChips.length > 0 ? (
-        <div className="mt-6 flex flex-wrap items-center gap-1.5">
+        <div className="mt-6 flex flex-wrap items-center gap-1">
           <FilterChip
             label="All"
             count={sessions.length}
@@ -178,88 +146,66 @@ export default function SessionsListPage() {
       ) : null}
 
       {error ? (
-        <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
+        <div className="mt-6 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive">
           {error}
         </div>
       ) : null}
 
-      <div className="mt-6 overflow-hidden rounded-lg border bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-12">Status</TableHead>
-              <TableHead>ID</TableHead>
-              <TableHead>Agent</TableHead>
-              <TableHead>Sandbox</TableHead>
-              <TableHead>Created</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredSessions.length === 0 ? (
-              <TableRow className="hover:bg-transparent">
-                <TableCell
-                  colSpan={5}
-                  className="h-24 text-center text-sm text-muted-foreground"
-                >
-                  {sessions.length === 0
-                    ? "No sessions yet. Open an agent and click Spawn session to create one."
-                    : "No sessions match this filter."}
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredSessions.map((s) => {
-                const agentName =
-                  agentNameById.get(s.agent_id) ?? s.agent_id;
-                return (
-                  <TableRow
-                    key={s.id}
-                    onClick={() => router.push(`/sessions/${s.id}`)}
-                    className="cursor-pointer hover:bg-muted/40"
+      {filteredSessions.length === 0 && !loading ? (
+        <div className="mt-10 rounded-lg border border-dashed bg-card/40 px-6 py-16 text-center text-sm text-muted-foreground">
+          {sessions.length === 0
+            ? "No sessions yet. Open an agent and click Spawn session."
+            : "No sessions match this filter."}
+        </div>
+      ) : (
+        <ul className="mt-8 overflow-hidden rounded-lg border bg-card">
+          {filteredSessions.map((s, i) => {
+            const agentName = agentNameById.get(s.agent_id) ?? s.agent_id;
+            return (
+              <li
+                key={s.id}
+                onClick={() => router.push(`/sessions/${s.id}`)}
+                className={
+                  "flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 " +
+                  (i > 0 ? "border-t" : "")
+                }
+              >
+                <span
+                  aria-label={`status ${s.status}`}
+                  title={s.status}
+                  className={`inline-block size-2 shrink-0 rounded-full ${statusDotClass(s.status)}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/agents/${s.agent_id}`);
+                    }}
+                    className="rounded-sm text-[14px] font-medium text-foreground transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   >
-                    <TableCell>
-                      <span
-                        aria-label={`status ${s.status}`}
-                        title={s.status}
-                        className={`inline-block size-1.5 rounded-full ${statusDotClass(s.status)}`}
-                      />
-                    </TableCell>
-                    <TableCell
-                      className="font-mono text-xs text-foreground"
-                      title={s.id}
-                    >
-                      {truncateId(s.id)}
-                    </TableCell>
-                    <TableCell>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          router.push(`/agents/${s.agent_id}`);
-                        }}
-                        className="rounded-sm text-sm font-medium underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
-                      >
-                        {agentName}
-                      </button>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {s.sandbox_url ? (
-                        <span title={s.sandbox_url}>
-                          {s.sandbox_url.replace(/^https?:\/\//, "")}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-sm text-muted-foreground">
-                      {formatRelative(s.created_at)}
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                    {agentName}
+                  </button>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                    {s.id}
+                  </div>
+                </div>
+                <span
+                  className="hidden shrink-0 font-mono text-[11px] text-muted-foreground sm:inline"
+                  title={s.sandbox_url ?? undefined}
+                >
+                  {s.sandbox_url
+                    ? s.sandbox_url.replace(/^https?:\/\//, "")
+                    : "—"}
+                </span>
+                <span className="shrink-0 tabular-nums text-[12px] text-muted-foreground">
+                  {formatRelative(s.created_at)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -278,10 +224,10 @@ function FilterChip({ label, count, active, onClick }: FilterChipProps) {
       onClick={onClick}
       aria-pressed={active}
       className={
-        "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none " +
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 " +
         (active
-          ? "border-border bg-accent text-foreground"
-          : "border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground")
+          ? "bg-accent text-foreground"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground")
       }
     >
       <span className="font-medium">{label}</span>
