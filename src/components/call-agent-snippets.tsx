@@ -1,10 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Loader2, Play } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { getProxyBase } from "@/lib/api";
+import {
+  ApiError,
+  getApiKey,
+  getProxyBase,
+  harnessResponseText,
+  sendMessage,
+  spawnSession,
+} from "@/lib/api";
 
 type Lang = "curl" | "python" | "typescript";
 
@@ -210,13 +217,129 @@ function SnippetBlock({ step }: SnippetBlockProps) {
   );
 }
 
+const TRY_PROMPT = "In one sentence, what is this repo?";
+
+type RunPhase = "idle" | "spawning" | "asking" | "done" | "failed";
+
+interface RunResult {
+  phase: RunPhase;
+  startedAt: number;
+  elapsedSec: number;
+  error?: string;
+  prompt?: string;
+  response?: string;
+  sessionId?: string;
+}
+
+const NEEDS_KEY_PROMPT =
+  "Set your LITELLM_API_KEY first — open the browser console and run " +
+  "localStorage.setItem('LITELLM_API_KEY', 'sk-...').";
+
 export function CallAgentSnippets({ agentId }: CallAgentSnippetsProps) {
   const [lang, setLang] = useState<Lang>("curl");
   const [base, setBase] = useState<string>("http://localhost:4000");
+  const [run, setRun] = useState<RunResult>({
+    phase: "idle",
+    startedAt: 0,
+    elapsedSec: 0,
+  });
+  const [keyMissing, setKeyMissing] = useState(false);
 
   useEffect(() => {
     setBase(getProxyBase());
   }, []);
+
+  // Tick a 1s elapsed counter while the run is in flight so the user has
+  // something to look at during the 50–90s Fargate cold start.
+  useEffect(() => {
+    if (run.phase !== "spawning" && run.phase !== "asking") return;
+    const id = window.setInterval(() => {
+      setRun((prev) => {
+        if (prev.phase !== "spawning" && prev.phase !== "asking") return prev;
+        return {
+          ...prev,
+          elapsedSec: Math.floor((Date.now() - prev.startedAt) / 1000),
+        };
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [run.phase]);
+
+  async function handleTry() {
+    if (run.phase === "spawning" || run.phase === "asking") return;
+    const key = getApiKey();
+    if (!key) {
+      setKeyMissing(true);
+      return;
+    }
+    setKeyMissing(false);
+    const startedAt = Date.now();
+    setRun({
+      phase: "spawning",
+      startedAt,
+      elapsedSec: 0,
+      prompt: TRY_PROMPT,
+    });
+
+    try {
+      const session = await spawnSession(agentId, {
+        title: "ui try-it",
+        initial_prompt: TRY_PROMPT,
+      });
+      // The spawn response carries the assistant's first reply when an
+      // initial_prompt is set, so we don't need a separate /message call.
+      const text =
+        harnessResponseText(session.response) ||
+        "(spawn returned no text — try sending a message manually)";
+      setRun({
+        phase: "done",
+        startedAt,
+        elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+        prompt: TRY_PROMPT,
+        response: text,
+        sessionId: session.id,
+      });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setRun({
+        phase: "failed",
+        startedAt,
+        elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+        prompt: TRY_PROMPT,
+        error: msg,
+      });
+    }
+  }
+
+  // Step 2 reuses the session_id from step 1 so the user can keep chatting.
+  const followUpDisabled = !run.sessionId || run.phase === "asking";
+  async function handleFollowUp() {
+    if (!run.sessionId || run.phase === "asking") return;
+    const startedAt = Date.now();
+    setRun((prev) => ({ ...prev, phase: "asking", startedAt, elapsedSec: 0 }));
+    try {
+      const reply = await sendMessage(run.sessionId, {
+        text: "What about its router?",
+      });
+      const text =
+        harnessResponseText(reply) || "(no text in response)";
+      setRun((prev) => ({
+        ...prev,
+        phase: "done",
+        elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+        prompt: "What about its router?",
+        response: text,
+      }));
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setRun((prev) => ({
+        ...prev,
+        phase: "failed",
+        elapsedSec: Math.floor((Date.now() - startedAt) / 1000),
+        error: msg,
+      }));
+    }
+  }
 
   const steps = useMemo(() => {
     switch (lang) {
@@ -229,35 +352,133 @@ export function CallAgentSnippets({ agentId }: CallAgentSnippetsProps) {
     }
   }, [lang, base, agentId]);
 
+  const running = run.phase === "spawning" || run.phase === "asking";
+  const tryLabel =
+    run.phase === "spawning"
+      ? `Spawning… ${run.elapsedSec}s`
+      : run.phase === "asking"
+        ? `Asking… ${run.elapsedSec}s`
+        : run.phase === "done" || run.phase === "failed"
+          ? "Run again"
+          : "Try it";
+
   return (
     <section>
-      <div className="mb-3 flex items-baseline justify-between">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
           Call this agent
         </h2>
-        <div role="tablist" aria-label="Language" className="flex gap-1">
-          {(Object.keys(LANG_LABEL) as Lang[]).map((l) => {
-            const active = l === lang;
-            return (
-              <button
-                key={l}
-                role="tab"
-                type="button"
-                aria-selected={active}
-                onClick={() => setLang(l)}
-                className={cn(
-                  "rounded-md px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                  active
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                {LANG_LABEL[l]}
-              </button>
-            );
-          })}
+        <div className="flex items-center gap-1">
+          <div role="tablist" aria-label="Language" className="flex gap-1">
+            {(Object.keys(LANG_LABEL) as Lang[]).map((l) => {
+              const active = l === lang;
+              return (
+                <button
+                  key={l}
+                  role="tab"
+                  type="button"
+                  aria-selected={active}
+                  onClick={() => setLang(l)}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                    active
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  {LANG_LABEL[l]}
+                </button>
+              );
+            })}
+          </div>
+          <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+          <button
+            type="button"
+            onClick={() => void handleTry()}
+            disabled={running}
+            className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-colors hover:bg-foreground/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {running ? (
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+            ) : (
+              <Play className="size-3" aria-hidden />
+            )}
+            {tryLabel}
+          </button>
         </div>
       </div>
+
+      {keyMissing ? (
+        <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+          {NEEDS_KEY_PROMPT}
+        </div>
+      ) : null}
+
+      {(run.phase === "spawning" ||
+        run.phase === "asking" ||
+        run.phase === "done" ||
+        run.phase === "failed") &&
+      run.prompt ? (
+        <div className="mb-3 overflow-hidden rounded-md border bg-card/40">
+          <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
+            <span className="font-medium uppercase tracking-wider">
+              Live result
+            </span>
+            <span aria-hidden>·</span>
+            <span className="font-mono">{run.phase}</span>
+            {run.elapsedSec > 0 ? (
+              <span className="ml-auto tabular-nums">
+                {run.elapsedSec}s
+              </span>
+            ) : null}
+          </div>
+          <div className="px-3 py-2 text-[13px]">
+            <div className="text-muted-foreground">
+              <span className="font-medium text-foreground">You:</span>{" "}
+              {run.prompt}
+            </div>
+            {run.phase === "spawning" ? (
+              <div className="mt-2 flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" aria-hidden />
+                Provisioning Fargate task… first call is the slow one.
+              </div>
+            ) : null}
+            {run.phase === "asking" ? (
+              <div className="mt-2 flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" aria-hidden />
+                Asking the agent…
+              </div>
+            ) : null}
+            {run.phase === "done" && run.response ? (
+              <div className="mt-2 whitespace-pre-wrap">
+                <span className="font-medium">Agent:</span> {run.response}
+              </div>
+            ) : null}
+            {run.phase === "failed" && run.error ? (
+              <div className="mt-2 font-mono text-[11px] text-destructive">
+                {run.error}
+              </div>
+            ) : null}
+
+            {run.phase === "done" && run.sessionId ? (
+              <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+                <span className="font-mono">session</span>
+                <span className="truncate font-mono text-foreground">
+                  {run.sessionId.slice(0, 8)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleFollowUp()}
+                  disabled={followUpDisabled}
+                  className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send follow-up
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         {steps.map((s) => (
@@ -266,11 +487,12 @@ export function CallAgentSnippets({ agentId }: CallAgentSnippetsProps) {
       </div>
 
       <p className="mt-3 text-[11px] text-muted-foreground">
-        Set <span className="font-mono">LITELLM_API_KEY</span> and{" "}
-        <span className="font-mono">SESSION_ID</span> in your environment.
         The whole flow is: <span className="font-mono">spawn</span> →{" "}
         <span className="font-mono">message</span> (or stream{" "}
-        <span className="font-mono">events</span>) → repeat.
+        <span className="font-mono">events</span>) → repeat. The{" "}
+        <span className="font-medium">Try it</span> button runs steps 1 + 2
+        against this proxy using your locally-stored{" "}
+        <span className="font-mono">LITELLM_API_KEY</span>.
       </p>
     </section>
   );
