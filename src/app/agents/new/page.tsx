@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,15 +18,24 @@ import { Label } from "@/components/ui/label";
 import { PfpUpload } from "@/components/pfp-upload";
 import {
   ApiError,
+  McpAllowedTools,
   McpRow,
+  McpToolRow,
   ModelRow,
   TemplateRow,
   createAgent,
   listMcps,
+  listMcpTools,
   listModels,
   listTemplates,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+interface ServerToolsState {
+  status: "idle" | "loading" | "ready" | "error";
+  tools: McpToolRow[];
+  error?: string;
+}
 
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 const NAME_MAX = 64;
@@ -58,7 +67,19 @@ export default function NewAgentPage() {
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
   const [mcps, setMcps] = useState<McpRow[]>([]);
-  const [selectedMcps, setSelectedMcps] = useState<Set<string>>(new Set());
+  // Per-server: which tools are enabled. A missing entry = server not enabled.
+  // An entry with an empty set = server enabled but every tool was unchecked
+  // (treated as "not enabled" at submit time — submitting an empty whitelist
+  // would be confusing).
+  const [enabledTools, setEnabledTools] = useState<Map<string, Set<string>>>(
+    new Map(),
+  );
+  // Which server cards are expanded in the UI.
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
+  // Lazy-fetched tools per server, keyed by server_id.
+  const [serverTools, setServerTools] = useState<Map<string, ServerToolsState>>(
+    new Map(),
+  );
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [metaError, setMetaError] = useState<string | null>(null);
 
@@ -116,14 +137,84 @@ export default function NewAgentPage() {
     return [...mcps].sort((a, b) => mcpLabel(a).localeCompare(mcpLabel(b)));
   }, [mcps]);
 
-  function toggleMcp(serverId: string) {
-    setSelectedMcps((prev) => {
+  async function loadToolsForServer(serverId: string) {
+    setServerTools((prev) => {
+      const next = new Map(prev);
+      next.set(serverId, { status: "loading", tools: [] });
+      return next;
+    });
+    try {
+      const tools = await listMcpTools(serverId);
+      setServerTools((prev) => {
+        const next = new Map(prev);
+        next.set(serverId, { status: "ready", tools });
+        return next;
+      });
+      // Default behavior: if the user has not yet picked any tools for this
+      // server, enable all of them — matches the old "select server" UX.
+      setEnabledTools((prev) => {
+        if (prev.has(serverId)) return prev;
+        const next = new Map(prev);
+        next.set(serverId, new Set(tools.map((t) => t.name)));
+        return next;
+      });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setServerTools((prev) => {
+        const next = new Map(prev);
+        next.set(serverId, { status: "error", tools: [], error: msg });
+        return next;
+      });
+    }
+  }
+
+  function toggleServerExpanded(serverId: string) {
+    setExpandedServers((prev) => {
       const next = new Set(prev);
-      if (next.has(serverId)) next.delete(serverId);
-      else next.add(serverId);
+      if (next.has(serverId)) {
+        next.delete(serverId);
+      } else {
+        next.add(serverId);
+        const existing = serverTools.get(serverId);
+        if (!existing || existing.status === "error") {
+          void loadToolsForServer(serverId);
+        }
+      }
       return next;
     });
   }
+
+  function toggleTool(serverId: string, toolName: string) {
+    setEnabledTools((prev) => {
+      const next = new Map(prev);
+      const current = new Set(next.get(serverId) ?? []);
+      if (current.has(toolName)) current.delete(toolName);
+      else current.add(toolName);
+      next.set(serverId, current);
+      return next;
+    });
+  }
+
+  function setAllToolsForServer(serverId: string, enabled: boolean) {
+    const state = serverTools.get(serverId);
+    if (!state || state.status !== "ready") return;
+    setEnabledTools((prev) => {
+      const next = new Map(prev);
+      next.set(
+        serverId,
+        enabled ? new Set(state.tools.map((t) => t.name)) : new Set(),
+      );
+      return next;
+    });
+  }
+
+  // Total count of (server, tool) pairs currently enabled — drives the
+  // summary line under the picker.
+  const totalEnabledTools = useMemo(() => {
+    let n = 0;
+    for (const set of enabledTools.values()) n += set.size;
+    return n;
+  }, [enabledTools]);
 
   const sortedModels = useMemo(
     () => [...models].sort((a, b) => a.id.localeCompare(b.id)),
@@ -158,6 +249,26 @@ export default function NewAgentPage() {
     if (!templateId) return;
     setSubmitting(true);
     try {
+      // Walk per-server tool selections. A server is "enabled" iff it has at
+      // least one tool checked. If every tool of a (fully-loaded) server is
+      // checked, send no whitelist for it — that lets the agent see future
+      // tools added on that server without re-saving. If only a subset is
+      // checked, send `mcp_allowed_tools` so the proxy can filter.
+      const mcpServers: string[] = [];
+      const mcpAllowedTools: McpAllowedTools[] = [];
+      for (const [serverId, toolSet] of enabledTools.entries()) {
+        if (toolSet.size === 0) continue;
+        mcpServers.push(serverId);
+        const state = serverTools.get(serverId);
+        const total = state?.status === "ready" ? state.tools.length : 0;
+        if (state?.status === "ready" && toolSet.size < total) {
+          mcpAllowedTools.push({
+            server_id: serverId,
+            tools: Array.from(toolSet).sort(),
+          });
+        }
+      }
+
       const created = await createAgent({
         name: name.trim() || undefined,
         model: model.trim(),
@@ -165,8 +276,9 @@ export default function NewAgentPage() {
         template_id: templateId,
         branch: branchOverride.trim() || undefined,
         pfp_url: pfpUrl ?? undefined,
-        mcp_servers:
-          selectedMcps.size > 0 ? Array.from(selectedMcps) : undefined,
+        mcp_servers: mcpServers.length > 0 ? mcpServers : undefined,
+        mcp_allowed_tools:
+          mcpAllowedTools.length > 0 ? mcpAllowedTools : undefined,
       });
       router.push(`/agents/${created.id}`);
     } catch (err) {
@@ -429,7 +541,11 @@ export default function NewAgentPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label>MCP servers (optional)</Label>
+              <Label>MCP tools (optional)</Label>
+              <p className="text-xs text-muted-foreground">
+                Pick which MCP tools this agent can call. Expand a server to
+                see its tools.
+              </p>
               {loadingMeta ? (
                 <p className="text-xs text-muted-foreground">
                   Loading MCP servers from proxy…
@@ -442,36 +558,39 @@ export default function NewAgentPage() {
               ) : (
                 <div className="rounded-lg border bg-card">
                   <ul
-                    role="listbox"
-                    aria-label="MCP servers"
-                    aria-multiselectable
+                    aria-label="MCP servers and tools"
                     className="divide-y"
                   >
                     {sortedMcps.map((m) => {
-                      const selected = selectedMcps.has(m.server_id);
+                      const expanded = expandedServers.has(m.server_id);
+                      const enabledSet = enabledTools.get(m.server_id);
+                      const enabledCount = enabledSet?.size ?? 0;
+                      const toolsState = serverTools.get(m.server_id);
+                      const totalCount =
+                        toolsState?.status === "ready"
+                          ? toolsState.tools.length
+                          : null;
                       return (
                         <li key={m.server_id}>
                           <button
                             type="button"
-                            role="option"
-                            aria-selected={selected}
-                            onClick={() => toggleMcp(m.server_id)}
+                            aria-expanded={expanded}
+                            onClick={() => toggleServerExpanded(m.server_id)}
                             disabled={submitting}
                             className={cn(
                               "flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                              selected && "bg-accent/30",
+                              enabledCount > 0 && "bg-accent/30",
                             )}
                           >
                             <span
-                              className={cn(
-                                "grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors",
-                                selected
-                                  ? "border-foreground bg-foreground text-background"
-                                  : "border-border bg-transparent",
-                              )}
+                              className="grid size-4 shrink-0 place-items-center text-muted-foreground"
                               aria-hidden
                             >
-                              {selected ? <Check className="size-3" /> : null}
+                              {expanded ? (
+                                <ChevronDown className="size-3.5" />
+                              ) : (
+                                <ChevronRight className="size-3.5" />
+                              )}
                             </span>
                             <span className="flex min-w-0 flex-1 flex-col">
                               <span className="truncate text-[13px] text-foreground">
@@ -483,21 +602,135 @@ export default function NewAgentPage() {
                                 </span>
                               ) : null}
                             </span>
+                            {enabledCount > 0 ? (
+                              <span className="shrink-0 rounded-md bg-foreground/90 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-background">
+                                {totalCount !== null
+                                  ? `${enabledCount}/${totalCount}`
+                                  : `${enabledCount} on`}
+                              </span>
+                            ) : null}
                             {m.transport ? (
                               <span className="shrink-0 rounded-md border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
                                 {m.transport}
                               </span>
                             ) : null}
                           </button>
+                          {expanded ? (
+                            <div className="border-t bg-muted/20 px-3 py-2">
+                              {!toolsState || toolsState.status === "loading" ? (
+                                <p className="py-1 text-xs text-muted-foreground">
+                                  Loading tools…
+                                </p>
+                              ) : toolsState.status === "error" ? (
+                                <div className="space-y-2">
+                                  <p className="font-mono text-xs text-destructive">
+                                    {toolsState.error ?? "Failed to load tools."}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void loadToolsForServer(m.server_id)
+                                    }
+                                    className="text-xs text-foreground underline underline-offset-2 hover:no-underline"
+                                  >
+                                    Retry
+                                  </button>
+                                </div>
+                              ) : toolsState.tools.length === 0 ? (
+                                <p className="py-1 text-xs text-muted-foreground">
+                                  This server exposes no tools.
+                                </p>
+                              ) : (
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-3 text-[11px]">
+                                    <button
+                                      type="button"
+                                      disabled={submitting}
+                                      onClick={() =>
+                                        setAllToolsForServer(m.server_id, true)
+                                      }
+                                      className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
+                                    >
+                                      Select all
+                                    </button>
+                                    <span aria-hidden className="text-muted-foreground/60">
+                                      ·
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={submitting}
+                                      onClick={() =>
+                                        setAllToolsForServer(m.server_id, false)
+                                      }
+                                      className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
+                                    >
+                                      Clear
+                                    </button>
+                                  </div>
+                                  <ul className="space-y-1">
+                                    {toolsState.tools.map((t) => {
+                                      const checked =
+                                        enabledSet?.has(t.name) ?? false;
+                                      return (
+                                        <li key={t.name}>
+                                          <label
+                                            className={cn(
+                                              "flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/40",
+                                              submitting &&
+                                                "cursor-not-allowed opacity-60",
+                                            )}
+                                          >
+                                            <span
+                                              className={cn(
+                                                "mt-0.5 grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors",
+                                                checked
+                                                  ? "border-foreground bg-foreground text-background"
+                                                  : "border-border bg-transparent",
+                                              )}
+                                              aria-hidden
+                                            >
+                                              {checked ? (
+                                                <Check className="size-3" />
+                                              ) : null}
+                                            </span>
+                                            <input
+                                              type="checkbox"
+                                              className="sr-only"
+                                              checked={checked}
+                                              disabled={submitting}
+                                              onChange={() =>
+                                                toggleTool(m.server_id, t.name)
+                                              }
+                                            />
+                                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                              <span className="truncate font-mono text-[12px] text-foreground">
+                                                {t.name}
+                                              </span>
+                                              {t.description ? (
+                                                <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                                                  {t.description}
+                                                </span>
+                                              ) : null}
+                                            </span>
+                                          </label>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
                         </li>
                       );
                     })}
                   </ul>
                 </div>
               )}
-              {selectedMcps.size > 0 ? (
+              {totalEnabledTools > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  {selectedMcps.size} selected.
+                  {totalEnabledTools} tool{totalEnabledTools === 1 ? "" : "s"}{" "}
+                  enabled.
                 </p>
               ) : null}
             </div>
