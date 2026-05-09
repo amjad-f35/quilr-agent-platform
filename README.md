@@ -1,92 +1,145 @@
 # LiteLLM Agent Platform
 
-A control plane for **managed agents** running on a [LiteLLM](https://github.com/BerriAI/litellm) AI Gateway. Create agents, spawn sandboxed sessions, watch them stream events back.
+A self-hosted control plane for **managed agents** on AWS Fargate, talking to a [LiteLLM](https://github.com/BerriAI/litellm) gateway as their model provider. Create agents, spawn sandboxed sessions, chat with them.
 
-Each agent is `(harness, repo)` — e.g. opencode + your monorepo. Spawning a session boots a fresh Fargate task running that harness against that repo. The proxy owns the lifecycle. This UI talks to it.
+Each agent binds `(harness, repo, model, prompt)`. Spawning a session launches a fresh Fargate task running the [opencode](https://opencode.ai) harness, cloned to the configured repo, with the agent's env injected. The TypeScript backend owns Fargate lifecycle (RunTask → wait ready → harness HTTP), Postgres state, and a 60-second reconciler that kills orphan tasks and reaps idle sessions. Frontend, backend, and worker live in one repo.
 
-<img width="1056" height="720" alt="Google Chrome" src="https://github.com/user-attachments/assets/13a8ab51-3cf2-493c-ae25-bc7bcacadc4b" />
-
-
-
-## What you get
+<img width="1056" height="720" alt="Agent detail" src="https://github.com/user-attachments/assets/13a8ab51-3cf2-493c-ae25-bc7bcacadc4b" />
 
 ![Agents list](./docs/screenshots/agents.png)
 
-![Agent detail](./docs/screenshots/agent-detail.png)
-
-## How it works
+## Architecture
 
 ```
-   browser                this UI                  LiteLLM proxy            Fargate
-   ───────                ───────                  ─────────────            ───────
+   browser ──► Next.js (this app) ──► Fargate task (opencode harness)
+                  │                       │
+                  │                       └─► LiteLLM gateway ──► models
+                  │
+                  ├─► Postgres (Prisma: Agent, Session)
+                  └─► AWS SDK (ECS RunTask / StopTask, EC2 ENI lookup)
 
-   click "spawn"   ───►   POST /api/proxy/...
-                          + Authorization header   POST /v1/managed_agents
-                          (server-side)            /agents/{id}/session     boots task
-                                                                            (~50–90s)
-   stream events   ◄───   GET  /api/proxy/...      GET .../sessions/{id}    SSE
-                          (passes SSE through)     /events
+   sidecar worker (npm run worker) ──► reconciler tick every 60s
 ```
 
-The browser never holds the proxy API key. It hits `/api/proxy/[...path]` on this app — a Next.js Route Handler that attaches `Authorization: Bearer $LITELLM_API_KEY` server-side and forwards to `$LITELLM_BASE_URL`. Inspecting the page bundle or the Network tab will not leak the key.
+`/api/v1/managed_agents/*` are the route handlers that own Fargate + DB. `/api/v1/[...path]` and `/api/mcp-rest/[...path]` are passthroughs to the LiteLLM gateway with the master key attached server-side. `MASTER_KEY` gates everything; the browser collects it at `/login` and stashes it in localStorage.
 
-## Deploy
+## Prereqs
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https%3A%2F%2Fgithub.com%2FBerriAI%2Flitellm-agent-platform)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BerriAI/litellm-agent-platform)
+- **Docker Desktop** running locally (only needed once, for `setup.sh` to build + push the harness image to ECR).
+- **AWS account** with permission to create ECR repos, ECS clusters, IAM roles, security groups, log groups, and run Fargate tasks. The default boto3-compatible credential chain is used.
+- **A default VPC** in your target region with at least one public subnet (`map-public-ip-on-launch=true`). `setup.sh` discovers it automatically.
+- **Postgres** (any provider — Neon, RDS, local, etc.).
+- **A running LiteLLM gateway** the harness can call for model traffic (`LITELLM_API_BASE` + `LITELLM_API_KEY`).
+- **Node 20+**.
 
-Set two **server-side** env vars. They must NOT have a `NEXT_PUBLIC_` prefix.
+## Setup
 
-| Var                | Example                            |
-| ------------------ | ---------------------------------- |
-| `LITELLM_BASE_URL` | `https://your-proxy.example.com`   |
-| `LITELLM_API_KEY`  | `sk-...` (master or virtual key)   |
-
-### Docker
-
-A `Dockerfile` is included for one-click deploys to anything that runs
-containers (Fly, Cloud Run, ECS, Kubernetes, your laptop):
+### 1. Clone + install
 
 ```bash
-docker build -t litellm-agent-platform .
-docker run --rm -p 3000:3000 \
-  -e LITELLM_BASE_URL=https://your-proxy.example.com \
-  -e LITELLM_API_KEY=sk-... \
-  litellm-agent-platform
-```
-
-The image uses Next.js standalone output — the final stage is ~150 MB and
-runs as a non-root user.
-
-## Run locally
-
-```bash
+git clone https://github.com/BerriAI/litellm-agent-platform
+cd litellm-agent-platform
 npm install
-cp .env.local.example .env.local   # fill in LITELLM_BASE_URL + LITELLM_API_KEY
-npm run dev                         # http://localhost:3000
+cp .env.example .env
 ```
 
-## Proxy endpoints used
+### 2. Fill `.env`
+
+| Var | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string. |
+| `UI_USERNAME` | Display name shown in the UI sign-in (any string). |
+| `MASTER_KEY` | Server-side bearer the UI signs in with. Min 8 chars. |
+| `AWS_REGION` | AWS region for ECR/ECS/EC2. |
+| `AWS_CLUSTER` | ECS cluster name (default `litellm-agents`; created by `setup.sh` if missing). |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | IAM creds with ECS/ECR/EC2/IAM/Logs/STS perms. |
+| `AWS_TASK_DEFINITION_ARN` / `AWS_SUBNETS` / `AWS_SECURITY_GROUP` | Filled in by `setup.sh`. Leave blank for now. |
+| `PREINSTALLED_GITHUB_REPO` | Default repo cloned into a sandbox when an agent has no `repo_url`. |
+| `LITELLM_API_BASE` / `LITELLM_API_KEY` | LiteLLM gateway the harness uses for model calls. |
+| `CONTAINER_PORT` | Harness HTTP port (default 4096). |
+| `RECONCILE_INTERVAL_SECONDS` | Worker tick (default 60). |
+| `CONTAINER_ENV_*` | Anything with this prefix is injected into every Fargate container with the prefix stripped (e.g. `CONTAINER_ENV_GITHUB_TOKEN=ghp_...` → container sees `GITHUB_TOKEN`). |
+
+### 3. Provision AWS infra
+
+`setup.sh` is bash + `aws` CLI + `docker`. Idempotent — re-run any time.
+
+```bash
+./setup.sh
+```
+
+It does, in order:
+
+1. ECR repo `litellm-agents-opencode` (created if missing).
+2. `docker build --platform linux/amd64 harnesses/opencode/` and pushes the image, tag = git short SHA. (Mac silicon builds amd64 via QEMU emulation.)
+3. IAM role `litellm-agents-task-exec` with `AmazonECSTaskExecutionRolePolicy`.
+4. CloudWatch log group `/ecs/litellm-agents`.
+5. ECS cluster `$AWS_CLUSTER`.
+6. Default-VPC public subnet + a security group (`litellm-agents-sg`) with `4096/tcp` ingress from `0.0.0.0/0`.
+7. ECS task definition `litellm-agents-opencode` (FARGATE, 512 cpu / 1024 mem, X86_64).
+8. Prints the four values you need to paste back into `.env`:
 
 ```
-GET    /v1/managed_agents/dockerfiles
-GET    /v1/managed_agents/sandbox-templates
-POST   /v1/managed_agents/agents
-GET    /v1/managed_agents/agents
-GET    /v1/managed_agents/agents/{id}
-PATCH  /v1/managed_agents/agents/{id}                # name + pfp_url + mcp_servers
-POST   /v1/managed_agents/agents/{id}/session        # boots Fargate, ~50–90s
-GET    /v1/managed_agents/sessions
-GET    /v1/managed_agents/sessions/{id}
-POST   /v1/managed_agents/sessions/{id}/message
-GET    /v1/managed_agents/sessions/{id}/events       # SSE
-DELETE /v1/managed_agents/sessions/{id}
-GET    /v1/mcp/server                                # MCP picker
-GET    /v1/models                                    # model picker
+AWS_TASK_DEFINITION_ARN=arn:aws:ecs:...:task-definition/litellm-agents-opencode:N
+AWS_SUBNETS=subnet-...
+AWS_SECURITY_GROUP=sg-...
+OPENCODE_IMAGE_URI=<account>.dkr.ecr.<region>.amazonaws.com/litellm-agents-opencode:<sha>
 ```
+
+Re-run `setup.sh` whenever you change `harnesses/opencode/Dockerfile` or `entrypoint.sh` — it pushes a new image tag and registers a new task definition revision.
+
+### 4. Migrate the database
+
+```bash
+npx prisma db push          # creates `managed_agent` + `managed_agent_session`
+```
+
+### 5. Run
+
+Two processes; both read `.env`.
+
+```bash
+npm run dev                 # Next.js on :3000 — frontend + API
+npm run worker              # reconciler loop (orphan + idle sweep, 60s)
+```
+
+Open `http://localhost:3000`. You'll be bounced to `/login` — paste the `MASTER_KEY` you set.
+
+## Lifecycle, cost, and cleanup
+
+- **Cold session boot** is ~50–120 s: ECS RunTask → ENI public-IP attach → opencode HTTP ready → first message. The route handler holds the request open for the full duration; expect long-running response times.
+- A `ready` Fargate task burns ~$0.04/hr (0.5 vCPU + 1 GB).
+- The worker reconciler does three sweeps every `RECONCILE_INTERVAL_SECONDS`:
+  - **Orphan tasks** — running tasks tagged with `litellm_session_id` whose row is missing or in `dead/failed/stopped` get `StopTask`'d. 5 min grace for fresh tasks.
+  - **Stuck `creating`** — sessions stuck creating > 10 min get failed.
+  - **Idle `ready`** — sessions whose `last_seen_at` is older than 24 h get killed (`failure_reason: "idle timeout"`).
+- Manual stop: `DELETE /api/v1/managed_agents/sessions/{id}`.
+
+## Endpoints
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/v1/managed_agents/dockerfiles` | Returns the single bundled harness (`opencode`). |
+| GET / POST | `/api/v1/managed_agents/agents` | List + create. |
+| GET / PATCH | `/api/v1/managed_agents/agents/{id}` | Fetch + update (name, pfp, mcp servers). |
+| POST | `/api/v1/managed_agents/agents/{id}/session` | Spin Fargate. ~50–120 s. Optional `initial_prompt`. |
+| GET / DELETE | `/api/v1/managed_agents/sessions/{id}` | Fetch + stop. |
+| GET | `/api/v1/managed_agents/sessions` | Optional `?agent_id=`. |
+| POST | `/api/v1/managed_agents/sessions/{id}/message` | Forwards to harness on the Fargate task. |
+| any | `/api/v1/[...path]` | Passthrough to `${LITELLM_API_BASE}/v1/...` (e.g. `/v1/models`, `/v1/mcp/server`). |
+| any | `/api/mcp-rest/[...path]` | Passthrough to `${LITELLM_API_BASE}/mcp-rest/...` (MCP tool listing). |
+
+All endpoints require `Authorization: Bearer <MASTER_KEY>`.
 
 ## Stack
 
-- Next.js 16 App Router · React 19
-- Tailwind v4 · shadcn/ui
-- Server-side proxy route — API key never leaves the server
+- Next.js 16 App Router · React 19 · Tailwind v4 · shadcn/ui
+- Prisma 6 + Postgres
+- AWS SDK v3 (`@aws-sdk/client-ecs`, `@aws-sdk/client-ec2`, `@aws-sdk/credential-providers`)
+- undici for outbound harness + LiteLLM HTTP
+- zod for env + request body validation
+- Reconciler worker via `tsx --env-file=.env`
+
+## Pairs with
+
+[BerriAI/litellm#27427](https://github.com/BerriAI/litellm/pull/27427) — the upstream Python managed-agents endpoints this repo replaces. You only need a LiteLLM gateway that can serve `/v1/models`, `/v1/mcp/server`, `/mcp-rest/tools/list`, and the chat/completions traffic the harness sends; no `general_settings.managed_agents` block is required on the gateway anymore.
