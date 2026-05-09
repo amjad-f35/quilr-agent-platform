@@ -265,7 +265,13 @@ export async function runTask(
               ports: [{ containerPort: agent.container_port }],
               env: buildContainerEnv(opts),
               resources: {
-                requests: { cpu: "500m", memory: "1Gi" },
+                // Opencode is mostly idle between LLM round-trips — it's a
+                // thin HTTP server forwarding to the model. Right-size the
+                // request so a single-node kind cluster can fit a useful
+                // number of warm + active sandboxes (4 vCPU / ~6GiB usable
+                // typically). Limits stay generous so a chatty session
+                // burst isn't artificially throttled.
+                requests: { cpu: "100m", memory: "256Mi" },
                 limits: { cpu: "1", memory: "1Gi" },
               },
             },
