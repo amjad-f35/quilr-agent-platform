@@ -20,6 +20,7 @@
  */
 
 import { prisma } from "@/server/db";
+import { env } from "@/server/env";
 import { listTaggedTasks, stopTask } from "@/server/fargate";
 import {
   RECONCILE_NEW_TASK_GRACE_MS,
@@ -27,6 +28,25 @@ import {
   SESSION_IDLE_TIMEOUT_MS,
   type ReconcileResult,
 } from "@/server/types";
+
+/**
+ * True if this reconciler is allowed to stop the given task.
+ *
+ * Scoping rule: each running instance stamps its `DEPLOY_ID` on every
+ * Fargate task it launches (see fargate.ts:runTask) and only stops tasks
+ * whose tag matches its own. This prevents one process (laptop, CI,
+ * second replica) from killing tasks launched by a different process
+ * sharing the same ECS cluster — the 2026-05-09 incident pattern.
+ *
+ * Two cases yield `false`:
+ *   - Different deploy_id: another process owns this task.
+ *   - Null deploy_id (legacy task launched before the tag existed):
+ *     no clear owner, so leave it alone. Old tasks naturally cycle out
+ *     via their own deploy's idle / ghost sweeps once it upgrades.
+ */
+function ownedByThisDeploy(task: { deploy_id: string | null }): boolean {
+  return task.deploy_id === env.DEPLOY_ID;
+}
 
 const DEAD_STATUSES = new Set(["dead", "failed", "stopped"]);
 
@@ -75,6 +95,7 @@ async function sweepWarmOrphans(
   warm_tagged: Array<{
     task_arn: string;
     warm_task_id: string | null;
+    deploy_id: string | null;
     created_at: Date | null;
     started_at: Date | null;
   }>,
@@ -112,6 +133,8 @@ async function sweepWarmOrphans(
 
   let stopped = 0;
   for (const task of warm_tagged) {
+    // Deploy-scope guard — same reasoning as the session sweep above.
+    if (!ownedByThisDeploy(task)) continue;
     // Owned by a live Session — task is in use, leave it alone.
     if (liveSessionArns.has(task.task_arn)) continue;
 
@@ -159,6 +182,13 @@ export async function reconcileOrphans(): Promise<ReconcileResult> {
   const bySessionId = new Map(rows.map((r) => [r.session_id, r]));
 
   for (const task of managed) {
+    // Deploy-scope guard: only act on tasks our own deploy launched. A
+    // missing/wrong session_id row could mean "the task is genuinely
+    // orphaned" OR "another deploy launched it and uses a different DB" —
+    // we can't tell from this side, so the only safe action is to leave
+    // tasks belonging to other deploys alone.
+    if (!ownedByThisDeploy(task)) continue;
+
     const sid = task.session_id as string;
     const row = bySessionId.get(sid);
 
