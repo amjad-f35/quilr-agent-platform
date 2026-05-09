@@ -47,9 +47,60 @@ export const UpdateAgentBody = z.object({
 });
 export type UpdateAgentBody = z.infer<typeof UpdateAgentBody>;
 
+/**
+ * Keys reserved by the harness runtime. Per-session `env_vars` cannot override
+ * any of these — the route returns 400 if a caller tries.
+ *
+ * `GIT_TOKEN` is reserved because the entrypoint uses it for clone-and-wipe
+ * semantics: the token is erased from the env after `git clone` so the LLM
+ * can't exfiltrate it. Callers that need a token persistent at runtime
+ * (e.g. for `gh pr create` or `git push`) must use `GITHUB_TOKEN` /
+ * `GH_TOKEN` instead — those flow through to the agent shell.
+ */
+export const RESERVED_ENV_KEYS: ReadonlySet<string> = new Set([
+  "REPO_URL",
+  "BRANCH",
+  "LITELLM_API_KEY",
+  "LITELLM_API_BASE",
+  "LITELLM_DEFAULT_MODEL",
+  "AGENT_PROMPT",
+  "PORT",
+  "GIT_TOKEN",
+]);
+
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_VARS_MAX_KEYS = 50;
+const ENV_VARS_MAX_BYTES = 16_384;
+
 export const CreateSessionBody = z.object({
   initial_prompt: z.string().optional(),
   title: z.string().optional(),
+  /**
+   * Per-session env vars forwarded into the harness shell at Fargate task
+   * launch time. Use for short-lived secrets like `GITHUB_TOKEN` or
+   * `CIRCLECI_TOKEN`. Never persisted to the database, never logged by value.
+   *
+   * Constraints (each is a 400 if violated):
+   *   - max 50 keys
+   *   - total JSON-encoded size ≤ 16 KB
+   *   - key names match /^[A-Za-z_][A-Za-z0-9_]*$/
+   *   - keys cannot intersect `RESERVED_ENV_KEYS`
+   */
+  env_vars: z
+    .record(z.string().regex(ENV_VAR_NAME_RE, "invalid env var name"), z.string())
+    .optional()
+    .refine((v) => !v || Object.keys(v).length <= ENV_VARS_MAX_KEYS, {
+      message: `env_vars: max ${ENV_VARS_MAX_KEYS} keys`,
+    })
+    .refine((v) => !v || JSON.stringify(v).length <= ENV_VARS_MAX_BYTES, {
+      message: `env_vars: total size must be ≤ ${ENV_VARS_MAX_BYTES} bytes`,
+    })
+    .refine(
+      (v) => !v || !Object.keys(v).some((k) => RESERVED_ENV_KEYS.has(k)),
+      {
+        message: `env_vars cannot override reserved keys: ${[...RESERVED_ENV_KEYS].join(", ")}`,
+      },
+    ),
 });
 export type CreateSessionBody = z.infer<typeof CreateSessionBody>;
 
@@ -177,6 +228,13 @@ export interface HarnessSendMessageOpts {
 export interface RunTaskOpts {
   agent: AgentRow;
   session_id: string;
+  /**
+   * Per-session env vars to forward into the harness container alongside the
+   * required `base` keys and the global `containerEnvPassthrough`. Required
+   * keys cannot be clobbered (see `buildContainerEnv` precedence). Values are
+   * never logged or persisted.
+   */
+  env_vars?: Record<string, string>;
 }
 
 export interface TaggedTask {
