@@ -1,5 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# First run: scaffold .env from .env.example, seed a random MASTER_KEY, exit.
+# User fills in AWS + LiteLLM creds, re-runs.
+if [ ! -f .env ]; then
+  cp .env.example .env
+  if command -v openssl >/dev/null 2>&1; then
+    KEY=$(openssl rand -hex 32)
+    sed -i.bak "s|^MASTER_KEY=.*|MASTER_KEY=$KEY|" .env && rm -f .env.bak
+  fi
+  cat <<'EOF'
+
+✓ created .env from .env.example with a random MASTER_KEY.
+
+Open .env and fill in:
+  • AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  (need ECS/ECR/EC2/IAM/Logs/STS)
+  • LITELLM_API_BASE, LITELLM_API_KEY
+
+Then re-run: ./setup.sh
+
+EOF
+  exit 0
+fi
+
 set -a
 source .env  # AWS_REGION, AWS_CLUSTER, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 set +a

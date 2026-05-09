@@ -43,3 +43,27 @@ EXPOSE 3000
 # server.js is what `output: "standalone"` writes — equivalent to `next start`
 # but without dragging in the dev/test toolchain.
 CMD ["node", "server.js"]
+
+# ---------- 4. prisma migrate (compose init container) ----------
+# `docker-compose.yml`'s db-migrate service builds this stage and runs it once
+# at startup against the postgres service before web + worker come up.
+FROM node:20-alpine AS prisma
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+CMD ["npx", "prisma", "db", "push", "--accept-data-loss", "--skip-generate"]
+
+# ---------- 5. worker (reconciler) ----------
+# Reuses `builder` (full node_modules, full source) so `tsx` and the
+# generated Prisma client are available at runtime.
+FROM node:20-alpine AS worker
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json /app/package-lock.json /app/tsconfig.json ./
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/src/server ./src/server
+COPY --from=builder /app/src/worker ./src/worker
+CMD ["npx", "tsx", "src/worker/index.ts"]

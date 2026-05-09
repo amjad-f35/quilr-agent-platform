@@ -10,9 +10,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "worker": "tsx --env-file=.env src/worker/index.ts",
-    "dev:all": "concurrently -n web,worker -c blue,magenta \"next dev\" \"tsx --env-file=.env src/worker/index.ts\"",
-    "quickstart": "./quickstart.sh"
+    "worker": "tsx --env-file=.env src/worker/index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.700.0",
@@ -40,7 +38,6 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "playwright": "^1.59.1",

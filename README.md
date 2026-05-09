@@ -8,30 +8,12 @@ Self-hosted control plane for sandboxed coding agents. An agent is a `(model, pr
 
 ## Quickstart
 
-Prereqs: Docker Desktop, AWS credentials with ECS/ECR/EC2/IAM/Logs/STS, a LiteLLM gateway, Node 20+.
-
 ```bash
-git clone https://github.com/BerriAI/litellm-agent-platform
-cd litellm-agent-platform
-npm install
-npm run quickstart
+./setup.sh
+docker compose up
 ```
 
-First run creates `.env` and exits — fill in `MASTER_KEY` (≥ 8 chars), AWS keys, and `LITELLM_API_BASE` / `LITELLM_API_KEY`, then re-run.
-
-Second run boots local Postgres (docker-compose), pushes the schema, runs `setup.sh` (writes the AWS task-def / subnet / SG / image URI back into `.env`), and starts Next.js + the reconciler worker side-by-side.
-
-Open `http://localhost:3000`, sign in at `/login`.
-
-### Manual (if you skip quickstart)
-
-```bash
-docker compose up -d        # Postgres on :5432
-cp .env.example .env        # fill in MASTER_KEY, AWS_*, LITELLM_*
-./setup.sh                  # provisions AWS, writes 4 values back to .env
-npx prisma db push
-npm run dev:all             # next dev + worker, one terminal
-```
+Needs Docker Desktop, AWS credentials with ECS/ECR/EC2/IAM/Logs/STS, a LiteLLM gateway. First `./setup.sh` run creates `.env` (with a random `MASTER_KEY`) and exits — fill in your AWS keys and `LITELLM_API_BASE` / `LITELLM_API_KEY`, then re-run.
 
 ### Container env passthrough
 

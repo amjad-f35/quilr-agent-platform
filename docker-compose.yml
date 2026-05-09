@@ -16,5 +16,42 @@ services:
       timeout: 2s
       retries: 30
 
+  # One-shot: push the Prisma schema to Postgres before web/worker start.
+  db-migrate:
+    build:
+      context: .
+      target: prisma
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm_agents
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: .
+    ports:
+      - "3000:3000"
+    env_file: .env
+    # Override the host-facing localhost URL with the compose-internal hostname.
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm_agents
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm_agents
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres-data:
