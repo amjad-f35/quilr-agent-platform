@@ -292,14 +292,22 @@ export async function runTask(
   };
 
   // Create Sandbox first; if Service create fails we delete the Sandbox so
-  // we don't leak a runtime pod with no host-side route.
-  await customApi().createNamespacedCustomObject({
-    group: SANDBOX_GROUP,
-    version: SANDBOX_VERSION,
-    namespace: ns,
-    plural: SANDBOX_PLURAL,
-    body: sandbox,
-  });
+  // we don't leak a runtime pod with no host-side route. AlreadyExists is
+  // treated as a soft success — it usually means a prior request crashed
+  // mid-flight, leaving the CR behind but no DB row pointing at it. The
+  // ghost reaper will eventually clean up; in the meantime we adopt the
+  // existing CR rather than 409 the user.
+  try {
+    await customApi().createNamespacedCustomObject({
+      group: SANDBOX_GROUP,
+      version: SANDBOX_VERSION,
+      namespace: ns,
+      plural: SANDBOX_PLURAL,
+      body: sandbox,
+    });
+  } catch (err) {
+    if (!isAlreadyExists(err)) throw err;
+  }
 
   try {
     // Sandbox controller stamps the pod with the Sandbox name; we mirror that
@@ -322,7 +330,14 @@ export async function runTask(
         ],
       },
     };
-    await coreApi().createNamespacedService({ namespace: ns, body: service });
+    try {
+      await coreApi().createNamespacedService({ namespace: ns, body: service });
+    } catch (err) {
+      if (!isAlreadyExists(err)) throw err;
+      // Same idempotency story as the Sandbox: adopt the existing
+      // Service rather than fail the spawn. The selector is deterministic
+      // from the Sandbox name so a pre-existing Service points at our pod.
+    }
   } catch (err) {
     // Roll back the Sandbox to avoid orphans.
     await deleteSandbox(name).catch(() => {
@@ -368,6 +383,18 @@ function isNotFound(err: unknown): boolean {
   const code = (err as { code?: number; statusCode?: number }).code
     ?? (err as { code?: number; statusCode?: number }).statusCode;
   return code === 404;
+}
+
+function isAlreadyExists(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: number; statusCode?: number }).code
+    ?? (err as { code?: number; statusCode?: number }).statusCode;
+  if (code === 409) return true;
+  // Some client-node versions surface the API error reason on the body
+  // instead of the HTTP code (e.g. 409 wrapped in a generic Error). Cheap
+  // string match keeps the fallback compatible.
+  const msg = (err as { message?: string }).message ?? "";
+  return msg.includes("AlreadyExists") || msg.includes("already exists");
 }
 
 export async function stopTask(
