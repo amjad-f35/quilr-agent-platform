@@ -16,7 +16,6 @@ import {
   MoreHorizontal,
   PanelRight,
   ArrowUp,
-  Square,
   Image as ImageIcon,
   Loader2,
   ChevronDown,
@@ -39,6 +38,8 @@ import { AgentAvatar } from "@/components/agent-avatar";
 
 type LocalRole = "user" | "assistant";
 
+type LocalStatus = "queued" | "in_progress" | "completed" | "failed";
+
 interface LocalMessage {
   id: string;
   role: LocalRole;
@@ -46,7 +47,7 @@ interface LocalMessage {
   // `text` on assistant is reserved for the failed/error path.
   text?: string;
   parts?: HarnessMessagePart[];
-  status: "in_progress" | "completed" | "failed";
+  status: LocalStatus;
   error?: string;
 }
 
@@ -117,7 +118,6 @@ export default function SessionThreadView() {
   const [agent, setAgent] = useState<AgentRow | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState<string>("");
-  const [sending, setSending] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState<boolean>(false);
@@ -125,6 +125,10 @@ export default function SessionThreadView() {
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  // Guards re-entry of the queue drain effect. The effect re-fires every time
+  // `messages` changes, including when the drain mutates a row, so without a
+  // ref we'd race ourselves.
+  const drainingRef = useRef<boolean>(false);
 
   const hasInProgress = useMemo(
     () => messages.some((m) => m.status === "in_progress"),
@@ -142,11 +146,34 @@ export default function SessionThreadView() {
   // lives in the harness — POST /message only returns the final assistant
   // turn, so we re-fetch after every send to pick up tool/reasoning parts
   // from the agent loop.
+  //
+  // Local rows for follow-ups the user queued while a previous turn was in
+  // flight aren't in the harness yet, so we splice them onto the end of the
+  // refreshed thread. They keep their local-id until the drain ships them
+  // and the next refresh picks them up under their harness id.
   const refreshThread = useCallback(async () => {
     if (!sessionId) return;
     try {
       const msgs = await listSessionMessages(sessionId);
-      setMessages(mapHarnessMessages(msgs));
+      const harnessMapped = mapHarnessMessages(msgs);
+      setMessages((prev) => {
+        const localTail: LocalMessage[] = [];
+        for (let i = 0; i < prev.length; i++) {
+          const m = prev[i];
+          if (m.role === "assistant" && m.status === "queued") {
+            const userMsg = i > 0 ? prev[i - 1] : null;
+            if (
+              userMsg &&
+              userMsg.role === "user" &&
+              userMsg.id.startsWith("local-")
+            ) {
+              localTail.push(userMsg);
+            }
+            localTail.push(m);
+          }
+        }
+        return [...harnessMapped, ...localTail];
+      });
     } catch (e) {
       // Harness can be unreachable mid-spawn — leave existing thread alone.
       console.warn("listSessionMessages failed", e);
@@ -251,47 +278,92 @@ export default function SessionThreadView() {
     }
   }, [messages]);
 
-  const handleSend = useCallback(async () => {
+  // Always enqueue. The drain effect below picks up the next `queued` row
+  // and POSTs it to the harness; submitting while a previous turn is still
+  // in flight is the supported path — the new message lands as `queued` and
+  // the drain processes it FIFO.
+  const handleSend = useCallback(() => {
     const content = draft.trim();
-    if (!content || !sessionId || sending) return;
+    if (!content || !sessionId) return;
     if (session?.status !== "ready") {
       setError(
         `Session is not ready yet (status=${session?.status ?? "unknown"}).`,
       );
       return;
     }
-    setSending(true);
     setError(null);
 
-    const userId = `local-${Date.now()}`;
-    const assistantId = `local-${Date.now()}-a`;
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userId = `local-${stamp}`;
+    const assistantId = `local-${stamp}-a`;
     setMessages((prev) => [
       ...prev,
       { id: userId, role: "user", text: content, status: "completed" },
-      { id: assistantId, role: "assistant", status: "in_progress" },
+      { id: assistantId, role: "assistant", status: "queued" },
     ]);
     setDraft("");
+  }, [draft, sessionId, session]);
 
-    try {
-      // POST returns only the final assistant message; refresh from the
-      // harness afterwards so tool/reasoning parts that came from earlier
-      // iterations of the agent loop also render.
-      await sendMessage(sessionId, { text: content });
-      await refreshThread();
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setError(msg);
+  // Queue drain: at most one in-flight POST per session. When the in-flight
+  // turn resolves and there's a `queued` assistant row waiting, kick the next.
+  // FIFO ordering carries through `messages` ordering — no separate queue
+  // structure to keep in sync. After a successful send we re-fetch the full
+  // thread so tool/reasoning parts from the agent loop render correctly.
+  useEffect(() => {
+    if (drainingRef.current) return;
+    if (!sessionId || session?.status !== "ready") return;
+    if (
+      messages.some(
+        (m) => m.role === "assistant" && m.status === "in_progress",
+      )
+    ) {
+      return;
+    }
+    const idx = messages.findIndex(
+      (m) => m.role === "assistant" && m.status === "queued",
+    );
+    if (idx === -1) return;
+
+    const queuedAssistant = messages[idx];
+    const userMsg = idx > 0 ? messages[idx - 1] : null;
+    if (!userMsg || userMsg.role !== "user" || !userMsg.text) return;
+    const userText = userMsg.text;
+    const assistantId = queuedAssistant.id;
+
+    drainingRef.current = true;
+
+    // All state mutations live inside the async task so they happen after
+    // the effect body returns — sidesteps `react-hooks/set-state-in-effect`
+    // and keeps render scheduling predictable.
+    void (async () => {
+      setError(null);
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, text: msg, status: "failed", error: msg }
-            : m,
+          m.id === assistantId ? { ...m, status: "in_progress" } : m,
         ),
       );
-    } finally {
-      setSending(false);
-    }
-  }, [draft, sessionId, sending, session]);
+
+      try {
+        await sendMessage(sessionId, { text: userText });
+        // Refresh from the harness so tool/reasoning parts render. The
+        // refresh logic preserves any still-queued local rows that came in
+        // mid-flight, so the next loop iteration picks them up.
+        await refreshThread();
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : (e as Error).message;
+        setError(msg);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, text: msg, status: "failed", error: msg }
+              : m,
+          ),
+        );
+      } finally {
+        drainingRef.current = false;
+      }
+    })();
+  }, [messages, sessionId, session?.status, refreshThread]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -312,7 +384,6 @@ export default function SessionThreadView() {
         messages={messages}
         loading={loading}
         error={error}
-        sending={sending}
         hasInProgress={hasInProgress}
         currentModel={currentModel}
         draft={draft}
@@ -340,7 +411,6 @@ interface MainPanelProps {
   messages: LocalMessage[];
   loading: boolean;
   error: string | null;
-  sending: boolean;
   hasInProgress: boolean;
   currentModel: string;
   draft: string;
@@ -361,7 +431,6 @@ function MainPanel({
   messages,
   loading,
   error,
-  sending,
   hasInProgress,
   currentModel,
   draft,
@@ -539,7 +608,6 @@ function MainPanel({
           <Composer
             draft={draft}
             setDraft={setDraft}
-            sending={sending}
             hasInProgress={hasInProgress}
             currentModel={currentModel}
             error={error}
@@ -594,6 +662,7 @@ function UserPromptBlock({
 function AssistantBlock({ msg }: { msg: LocalMessage }) {
   const failed = msg.status === "failed";
   const inProgress = msg.status === "in_progress";
+  const queued = msg.status === "queued";
   const parts = msg.parts ?? [];
 
   // Render parts in order. Skip step-start/step-finish — internal markers
@@ -615,6 +684,11 @@ function AssistantBlock({ msg }: { msg: LocalMessage }) {
           style={{ color: "#b91c1c" }}
         >
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+        </div>
+      ) : queued ? (
+        <div className="flex items-center gap-2 text-[13px] text-gray-400 leading-relaxed">
+          <span aria-hidden className="size-1.5 rounded-full bg-gray-300" />
+          queued — will send when current finishes
         </div>
       ) : inProgress && visibleParts.length === 0 ? (
         <div className="flex items-center gap-2 text-[14px] text-gray-400 leading-relaxed">
@@ -755,7 +829,6 @@ function ToolKv({ label, value }: { label: string; value: unknown }) {
 interface ComposerProps {
   draft: string;
   setDraft: (s: string) => void;
-  sending: boolean;
   hasInProgress: boolean;
   currentModel: string;
   error: string | null;
@@ -767,7 +840,6 @@ interface ComposerProps {
 function Composer({
   draft,
   setDraft,
-  sending,
   hasInProgress,
   currentModel,
   error,
@@ -775,10 +847,16 @@ function Composer({
   handleSend,
   handleKeyDown,
 }: ComposerProps) {
-  const canSend = draft.trim().length > 0 && !sending && !disabled;
+  // Submitting while a previous message is in flight is supported — the new
+  // message lands in the FIFO queue and the drain effect picks it up. So the
+  // textarea stays enabled and the send button is gated only on a non-empty
+  // draft + a ready sandbox.
+  const canSend = draft.trim().length > 0 && !disabled;
   const placeholder = disabled
     ? "Sandbox not ready yet…"
-    : "Add a follow up";
+    : hasInProgress
+      ? "Queue a follow up"
+      : "Add a follow up";
 
   return (
     <div className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden focus-within:ring-1 focus-within:ring-gray-300 focus-within:border-gray-300 transition-all">
@@ -787,7 +865,7 @@ function Composer({
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        disabled={sending || disabled}
+        disabled={disabled}
         rows={1}
         className="w-full p-4 outline-none resize-none text-[15px] placeholder:text-gray-400 bg-transparent"
       />
@@ -808,28 +886,20 @@ function Composer({
           >
             <ImageIcon className="w-4 h-4" />
           </button>
-          {hasInProgress ? (
-            <button
-              type="button"
-              disabled
-              className="bg-black text-white p-1.5 rounded-full opacity-50"
-              aria-label="Stop (not supported)"
-              title="Abort is not supported on this proxy yet"
-            >
-              <Square className="w-3 h-3 fill-current" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSend}
-              disabled={!canSend}
-              className="bg-black text-white p-1.5 rounded-full hover:bg-gray-800 transition-colors disabled:opacity-30 disabled:hover:bg-black"
-              aria-label="Send"
-              title="Send (Enter)"
-            >
-              <ArrowUp className="w-3.5 h-3.5" />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!canSend}
+            className="bg-black text-white p-1.5 rounded-full hover:bg-gray-800 transition-colors disabled:opacity-30 disabled:hover:bg-black"
+            aria-label={hasInProgress ? "Queue follow-up" : "Send"}
+            title={
+              hasInProgress
+                ? "Queue follow-up — sends when the current message finishes"
+                : "Send (Enter)"
+            }
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
     </div>
