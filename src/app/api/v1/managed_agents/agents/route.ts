@@ -14,6 +14,9 @@ import { env } from "@/server/env";
 import {
   CreateAgentBody,
   HARNESS_OPENCODE,
+  KNOWN_HARNESSES,
+  httpError,
+  resolveTaskDefinitionArn,
   toApiAgent,
 } from "@/server/types";
 import { wrap } from "@/server/route-helpers";
@@ -33,6 +36,12 @@ export const GET = wrap(async (req: Request) => {
 export const POST = wrap(async (req: Request) => {
   const identity = assertAuth(req);
   const body = CreateAgentBody.parse(await req.json());
+  const harness_id = body.harness_id ?? HARNESS_OPENCODE;
+  if (!KNOWN_HARNESSES.has(harness_id)) {
+    httpError(400, {
+      error: `unknown harness_id "${harness_id}". Valid: ${[...KNOWN_HARNESSES].join(", ")}`,
+    });
+  }
   const created = await prisma.agent.create({
     data: {
       agent_name: body.name ?? null,
@@ -41,12 +50,12 @@ export const POST = wrap(async (req: Request) => {
       // zod gives us `unknown[]`; Prisma's Json column wants InputJsonValue.
       // We trust the body here — the agent owner is authenticated.
       tools: body.tools as Prisma.InputJsonValue,
-      harness_id: HARNESS_OPENCODE,
+      harness_id,
       repo_url: body.repo_url ?? null,
       branch: body.branch ?? "main",
       pfp_url: body.pfp_url ?? null,
       mcp_servers: body.mcp_servers as Prisma.InputJsonValue,
-      task_definition_arn: env.AWS_TASK_DEFINITION_ARN,
+      task_definition_arn: resolveTaskDefinitionArn(harness_id, env),
       container_port: env.CONTAINER_PORT,
       created_by: identity.user_id,
     },
