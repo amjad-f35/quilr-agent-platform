@@ -9,11 +9,25 @@
 #   - pre-install gh + uv so agents don't have to bootstrap them at runtime
 #     (the gap that bit session adc694c3 / 2f12d7b3 today).
 
+# NOTE: build context is `harnesses/` (one level up). This Dockerfile lives
+# under claude-agent-sdk/ but it COPYs from the sibling `managed-tools/` too:
+#   docker buildx build -f harnesses/claude-agent-sdk/Dockerfile harnesses/
+
 FROM node:20-bookworm AS builder
-WORKDIR /build
-COPY package.json tsconfig.json ./
+
+# Shared tool-spec package — built first so the harness's `file:` dep
+# resolves to compiled .js + .d.ts at install time.
+WORKDIR /build/managed-tools
+COPY managed-tools/package.json managed-tools/tsconfig.json ./
 RUN npm install --no-audit --no-fund
-COPY src ./src
+COPY managed-tools/src ./src
+RUN npx tsc
+
+# Harness server.
+WORKDIR /build/harness
+COPY claude-agent-sdk/package.json claude-agent-sdk/tsconfig.json ./
+RUN npm install --no-audit --no-fund
+COPY claude-agent-sdk/src ./src
 RUN npx tsc
 
 # ------------------------------------------------------------------ runtime
@@ -47,12 +61,16 @@ RUN curl -fsSL -o /tmp/uv.tar.gz \
 
 # Harness server — only the production node_modules + compiled JS. We do a
 # fresh `npm install --omit=dev` here so the runtime image doesn't carry
-# tsc / @types — keeps the layer small.
+# tsc / @types — keeps the layer small. The managed-tools sibling must be
+# co-located at ../managed-tools so the `file:` dep resolves.
+WORKDIR /opt
+COPY --from=builder /build/managed-tools/package.json /opt/managed-tools/package.json
+COPY --from=builder /build/managed-tools/dist /opt/managed-tools/dist
 WORKDIR /opt/harness
-COPY --from=builder /build/package.json ./
-COPY --from=builder /build/dist ./dist
+COPY --from=builder /build/harness/package.json ./
+COPY --from=builder /build/harness/dist ./dist
 RUN npm install --omit=dev --no-audit --no-fund \
-    && chown -R sandbox:sandbox /opt/harness \
+    && chown -R sandbox:sandbox /opt/harness /opt/managed-tools \
     # Symlink the SDK's bundled `claude` binary into a stable PATH location
     # so the SDK's auto-resolver finds it regardless of cwd, AND so an agent
     # running inside the sandbox can invoke `claude` as a tool too.
@@ -60,7 +78,7 @@ RUN npm install --omit=dev --no-audit --no-fund \
          /usr/local/bin/claude
 
 WORKDIR /work
-COPY --chown=sandbox:sandbox entrypoint.sh /entrypoint.sh
+COPY --chown=sandbox:sandbox claude-agent-sdk/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
 
 USER sandbox
