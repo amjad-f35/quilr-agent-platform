@@ -24,6 +24,7 @@ model Agent {
   branch              String   @default("main")
   pfp_url             String?
   mcp_servers         Json     @default("[]")
+  env_vars            Json     @default("{}")
   task_definition_arn String
   container_port      Int      @default(4096)
   created_at          DateTime @default(now())

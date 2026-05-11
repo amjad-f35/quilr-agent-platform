@@ -54,6 +54,7 @@ export const POST = wrap(async (req: Request) => {
       branch: body.branch ?? "main",
       pfp_url: body.pfp_url ?? null,
       mcp_servers: body.mcp_servers as Prisma.InputJsonValue,
+      env_vars: (body.env_vars ?? {}) as Prisma.InputJsonValue,
       // Legacy column from the ECS era; on k8s we run the same harness
       // image for every Sandbox so we just stash that here. Plan is to
       // drop the column on the next schema bump.

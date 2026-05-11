@@ -51,35 +51,12 @@ export type SessionPhase =
   | "ready";
 
 // ============================================================================
-// API request schemas (zod) — handlers parse with these
+// Env var validation constants — shared by CreateAgentBody + CreateSessionBody
 // ============================================================================
 
-export const CreateAgentBody = z.object({
-  name: z.string().optional(),
-  model: z.string().min(1),
-  prompt: z.string().optional(),
-  tools: z.array(z.unknown()).default([]),
-  // Which harness binary the Fargate container runs. Picks the task
-  // definition family — opencode (default) or claude-agent-sdk. Kept open
-  // as `string` so adding a third harness is a one-line env change.
-  harness_id: z.string().optional(),
-  repo_url: z.string().url().optional(),
-  branch: z.string().optional(),
-  pfp_url: z.string().optional(),
-  mcp_servers: z.array(z.string()).default([]),
-});
-export type CreateAgentBody = z.infer<typeof CreateAgentBody>;
-
-export const UpdateAgentBody = z.object({
-  name: z.string().optional(),
-  pfp_url: z.string().optional(),
-  mcp_servers: z.array(z.string()).optional(),
-});
-export type UpdateAgentBody = z.infer<typeof UpdateAgentBody>;
-
 /**
- * Keys reserved by the harness runtime. Per-session `env_vars` cannot override
- * any of these — the route returns 400 if a caller tries.
+ * Keys reserved by the harness runtime. Agent-level and per-session `env_vars`
+ * cannot override any of these — the route returns 400 if a caller tries.
  *
  * `GIT_TOKEN` is reserved because the entrypoint uses it for clone-and-wipe
  * semantics: the token is erased from the env after `git clone` so the LLM
@@ -101,6 +78,55 @@ export const RESERVED_ENV_KEYS: ReadonlySet<string> = new Set([
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_VARS_MAX_KEYS = 50;
 const ENV_VARS_MAX_BYTES = 16_384;
+
+// ============================================================================
+// API request schemas (zod) — handlers parse with these
+// ============================================================================
+
+export const CreateAgentBody = z.object({
+  name: z.string().optional(),
+  model: z.string().min(1),
+  prompt: z.string().optional(),
+  tools: z.array(z.unknown()).default([]),
+  // Which harness binary the Fargate container runs. Picks the task
+  // definition family — opencode (default) or claude-agent-sdk. Kept open
+  // as `string` so adding a third harness is a one-line env change.
+  harness_id: z.string().optional(),
+  repo_url: z.string().url().optional(),
+  branch: z.string().optional(),
+  pfp_url: z.string().optional(),
+  mcp_servers: z.array(z.string()).default([]),
+  /**
+   * Agent-level env vars persisted to the DB and injected into every
+   * session container. Same constraints as CreateSessionBody.env_vars.
+   * Use for long-lived secrets like GITHUB_TOKEN or API keys the agent
+   * always needs. Per-session env_vars (from CreateSessionBody) take
+   * precedence over these when both are present for the same key.
+   */
+  env_vars: z
+    .record(z.string().regex(ENV_VAR_NAME_RE, "invalid env var name"), z.string())
+    .optional()
+    .refine((v) => !v || Object.keys(v).length <= ENV_VARS_MAX_KEYS, {
+      message: `env_vars: max ${ENV_VARS_MAX_KEYS} keys`,
+    })
+    .refine((v) => !v || JSON.stringify(v).length <= ENV_VARS_MAX_BYTES, {
+      message: `env_vars: total size must be ≤ ${ENV_VARS_MAX_BYTES} bytes`,
+    })
+    .refine(
+      (v) => !v || !Object.keys(v).some((k) => RESERVED_ENV_KEYS.has(k)),
+      {
+        message: `env_vars cannot override reserved keys: ${[...RESERVED_ENV_KEYS].join(", ")}`,
+      },
+    ),
+});
+export type CreateAgentBody = z.infer<typeof CreateAgentBody>;
+
+export const UpdateAgentBody = z.object({
+  name: z.string().optional(),
+  pfp_url: z.string().optional(),
+  mcp_servers: z.array(z.string()).optional(),
+});
+export type UpdateAgentBody = z.infer<typeof UpdateAgentBody>;
 
 export const CreateSessionBody = z.object({
   initial_prompt: z.string().optional(),
@@ -179,6 +205,7 @@ export interface ApiAgent {
   branch: string;
   pfp_url: string | null;
   mcp_servers: string[];
+  env_vars: Record<string, string>;
   created_at: string;
 }
 
@@ -521,6 +548,12 @@ export function toApiAgent(row: AgentRow): ApiAgent {
           (v): v is string => typeof v === "string",
         )
       : [],
+    env_vars:
+      row.env_vars &&
+      typeof row.env_vars === "object" &&
+      !Array.isArray(row.env_vars)
+        ? (row.env_vars as Record<string, string>)
+        : {},
     created_at: row.created_at.toISOString(),
   };
 }

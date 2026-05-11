@@ -253,10 +253,16 @@ async function buildContainerEnv(
     SESSION_ID: phaseToken,
     HARNESS_PROGRESS_TOKEN: phaseToken,
   };
-  // Same precedence as fargate.ts buildContainerEnv: passthrough -> per-session
-  // env_vars -> required base. Required keys always win.
+  // Precedence (lowest → highest): passthrough → agent-level env_vars → per-session env_vars → required base.
+  const agentEnvVars =
+    agent.env_vars &&
+    typeof agent.env_vars === "object" &&
+    !Array.isArray(agent.env_vars)
+      ? (agent.env_vars as Record<string, string>)
+      : {};
   const merged: Record<string, string> = {
     ...env.containerEnvPassthrough,
+    ...agentEnvVars,
     ...(env_vars ?? {}),
     ...base,
   };

@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { PfpUpload } from "@/components/pfp-upload";
+import { Plus, Trash2, Upload } from "lucide-react";
 import {
   ApiError,
   McpAllowedTools,
@@ -95,6 +96,9 @@ export default function NewAgentPage() {
   );
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [metaError, setMetaError] = useState<string | null>(null);
+
+  // Env vars: list of [key, value] pairs for the editor UI.
+  const [envVars, setEnvVars] = useState<[string, string][]>([["", ""]]);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +207,63 @@ export default function NewAgentPage() {
     });
   }
 
+  function parseEnvFile(text: string): [string, string][] {
+    const pairs: [string, string][] = [];
+    for (const raw of text.split("\n")) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq < 1) continue;
+      const key = line.slice(0, eq).trim();
+      let val = line.slice(eq + 1).trim();
+      // Strip surrounding quotes (single or double)
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      if (key) pairs.push([key, val]);
+    }
+    return pairs;
+  }
+
+  function handleEnvFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result;
+      if (typeof text !== "string") return;
+      const parsed = parseEnvFile(text);
+      if (parsed.length === 0) return;
+      setEnvVars((prev) => {
+        // Merge: keep existing non-empty rows, append parsed, then add blank row
+        const existing = prev.filter(([k]) => k.trim() !== "");
+        const merged = [...existing, ...parsed, ["", ""] as [string, string]];
+        return merged;
+      });
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function setEnvKey(idx: number, key: string) {
+    setEnvVars((prev) => prev.map((p, i) => (i === idx ? [key, p[1]] : p)));
+  }
+  function setEnvVal(idx: number, val: string) {
+    setEnvVars((prev) => prev.map((p, i) => (i === idx ? [p[0], val] : p)));
+  }
+  function addEnvRow() {
+    setEnvVars((prev) => [...prev, ["", ""]]);
+  }
+  function removeEnvRow(idx: number) {
+    setEnvVars((prev) => {
+      const next = prev.filter((_, i) => i !== idx);
+      return next.length === 0 ? [["", ""]] : next;
+    });
+  }
+
   // Total count of (server, tool) pairs currently enabled — drives the
   // summary line under the picker.
   const totalEnabledTools = useMemo(() => {
@@ -262,6 +323,12 @@ export default function NewAgentPage() {
         }
       }
 
+      const envVarsRecord: Record<string, string> = {};
+      for (const [k, v] of envVars) {
+        const key = k.trim();
+        if (key) envVarsRecord[key] = v;
+      }
+
       const created = await createAgent({
         name: name.trim() || undefined,
         model: model.trim(),
@@ -272,6 +339,7 @@ export default function NewAgentPage() {
         mcp_servers: mcpServers.length > 0 ? mcpServers : undefined,
         mcp_allowed_tools:
           mcpAllowedTools.length > 0 ? mcpAllowedTools : undefined,
+        env_vars: Object.keys(envVarsRecord).length > 0 ? envVarsRecord : undefined,
       });
       router.push(`/agents/${created.id}`);
     } catch (err) {
@@ -503,6 +571,88 @@ export default function NewAgentPage() {
                 rows={6}
                 disabled={submitting}
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Environment variables (optional)</Label>
+                <label
+                  className={cn(
+                    "flex cursor-pointer items-center gap-1.5 rounded-md border border-dashed px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground",
+                    submitting && "pointer-events-none opacity-50",
+                  )}
+                >
+                  <Upload className="size-3" aria-hidden />
+                  Upload .env
+                  <input
+                    type="file"
+                    accept=".env,text/plain"
+                    className="sr-only"
+                    disabled={submitting}
+                    onChange={handleEnvFileUpload}
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Injected into every session container. Stored encrypted in DB.
+                Per-session env vars (set at session create) take precedence.
+              </p>
+              <div className="rounded-lg border bg-card">
+                <ul className="divide-y">
+                  {envVars.map(([k, v], idx) => (
+                    <li key={idx} className="flex items-center gap-2 px-2 py-1.5">
+                      <Input
+                        value={k}
+                        onChange={(e) => setEnvKey(idx, e.target.value)}
+                        placeholder="KEY"
+                        disabled={submitting}
+                        className="h-7 flex-1 font-mono text-xs uppercase"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <span className="shrink-0 text-[11px] text-muted-foreground">=</span>
+                      <Input
+                        value={v}
+                        onChange={(e) => setEnvVal(idx, e.target.value)}
+                        placeholder="value"
+                        disabled={submitting}
+                        className="h-7 flex-[2] font-mono text-xs"
+                        autoComplete="off"
+                        spellCheck={false}
+                        type="password"
+                      />
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => removeEnvRow(idx)}
+                        className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                        aria-label="Remove row"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <div className="border-t px-2 py-1.5">
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={addEnvRow}
+                    className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                  >
+                    <Plus className="size-3" aria-hidden />
+                    Add variable
+                  </button>
+                </div>
+              </div>
+              {(() => {
+                const count = envVars.filter(([k]) => k.trim()).length;
+                return count > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {count} variable{count === 1 ? "" : "s"} set.
+                  </p>
+                ) : null;
+              })()}
             </div>
 
             <div className="space-y-1.5">

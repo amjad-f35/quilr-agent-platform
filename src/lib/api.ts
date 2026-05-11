@@ -156,6 +156,7 @@ export interface AgentRow {
   branch: string;
   pfp_url?: string | null;
   mcp_servers?: string[];
+  env_vars?: Record<string, string>;
   created_at?: string | null;
 }
 
@@ -411,6 +412,7 @@ export interface CreateAgentRequest {
   pfp_url?: string;
   mcp_servers?: string[];
   mcp_allowed_tools?: McpAllowedTools[];
+  env_vars?: Record<string, string>;
 }
 
 export interface UpdateAgentRequest {
