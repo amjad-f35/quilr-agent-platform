@@ -713,6 +713,67 @@ function phaseToStatus(phase: string | undefined): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// readPodLogs — fetch stdout+stderr of the harness container so the UI can
+// show a live "sandbox terminal" panel during creating-state spawns.
+//
+// The k8s log endpoint already merges stdout+stderr at the kubelet, so a
+// single call covers both streams. `sinceSeconds` / `tailLines` keep the
+// payload bounded — the UI re-polls every ~1s, and a giant historical dump
+// per tick would be wasteful. Returns "" when the pod hasn't been created
+// yet (the Sandbox CR exists but the controller hasn't stamped the pod, or
+// the pod was already torn down) so callers can render an empty terminal
+// without special-casing NotFound.
+// ---------------------------------------------------------------------------
+
+export interface ReadPodLogsOpts {
+  sinceSeconds?: number;
+  tailLines?: number;
+  /** Bounds the K8s API call so a stuck apiserver doesn't wedge the route. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_LOG_TIMEOUT_MS = 10_000;
+
+export async function readPodLogs(
+  task_arn: string,
+  opts: ReadPodLogsOpts = {},
+): Promise<string> {
+  const { sinceSeconds, tailLines, timeoutMs = DEFAULT_LOG_TIMEOUT_MS } = opts;
+  // AbortSignal.timeout doesn't propagate into the kubernetes client (it
+  // builds its own request). Race the call against a timeout instead so we
+  // never block the request thread for more than `timeoutMs`.
+  const call = coreApi().readNamespacedPodLog({
+    name: task_arn,
+    namespace: env.K8S_NAMESPACE,
+    container: CONTAINER_NAME,
+    sinceSeconds,
+    tailLines,
+  });
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error(`readPodLogs timeout after ${timeoutMs}ms`)),
+      timeoutMs,
+    ),
+  );
+  try {
+    const res = (await Promise.race([call, timeout])) as unknown;
+    // Newer client-node versions return the string directly; older versions
+    // wrap it in `{ body }`. Cover both.
+    if (typeof res === "string") return res;
+    if (res && typeof res === "object" && "body" in res) {
+      const body = (res as { body?: unknown }).body;
+      return typeof body === "string" ? body : "";
+    }
+    return "";
+  } catch (err) {
+    // Pod not (yet) created or already gone: return empty so the UI keeps
+    // polling without rendering an error. Anything else bubbles.
+    if (isNotFound(err)) return "";
+    throw err;
+  }
+}
+
 // Re-export ECS tag constants so callers that reference them (warm pool,
 // reconcile) work uniformly across backends. These are unused at runtime on
 // the k8s path — labels are namespaced separately above — but importing them
