@@ -9,25 +9,28 @@
 #   - pre-install gh + uv so agents don't have to bootstrap them at runtime
 #     (the gap that bit session adc694c3 / 2f12d7b3 today).
 
-# NOTE: build context is `harnesses/` (one level up). This Dockerfile lives
-# under claude-agent-sdk/ but it COPYs from the sibling `managed-tools/` too:
-#   docker buildx build -f harnesses/claude-agent-sdk/Dockerfile harnesses/
+# NOTE: build context is the repo root. This Dockerfile lives under
+# harnesses/claude-agent-sdk/ but it COPYs the platform-level
+# `managed-tools/` package too:
+#   docker buildx build -f harnesses/claude-agent-sdk/Dockerfile .
 
 FROM node:20-bookworm AS builder
 
 # Shared tool-spec package — built first so the harness's `file:` dep
-# resolves to compiled .js + .d.ts at install time.
+# resolves to compiled .js + .d.ts at install time. Path mirrors the
+# source tree so the package.json's `file:../../managed-tools` resolves.
 WORKDIR /build/managed-tools
 COPY managed-tools/package.json managed-tools/tsconfig.json ./
 RUN npm install --no-audit --no-fund
 COPY managed-tools/src ./src
 RUN npx tsc
 
-# Harness server.
-WORKDIR /build/harness
-COPY claude-agent-sdk/package.json claude-agent-sdk/tsconfig.json ./
+# Harness server — depth-2 path mirrors the source layout
+# (harnesses/claude-agent-sdk/) so file: resolves up two levels.
+WORKDIR /build/harnesses/claude-agent-sdk
+COPY harnesses/claude-agent-sdk/package.json harnesses/claude-agent-sdk/tsconfig.json ./
 RUN npm install --no-audit --no-fund
-COPY claude-agent-sdk/src ./src
+COPY harnesses/claude-agent-sdk/src ./src
 RUN npx tsc
 
 # ------------------------------------------------------------------ runtime
@@ -61,24 +64,24 @@ RUN curl -fsSL -o /tmp/uv.tar.gz \
 
 # Harness server — only the production node_modules + compiled JS. We do a
 # fresh `npm install --omit=dev` here so the runtime image doesn't carry
-# tsc / @types — keeps the layer small. The managed-tools sibling must be
-# co-located at ../managed-tools so the `file:` dep resolves.
-WORKDIR /opt
+# tsc / @types — keeps the layer small. The managed-tools package must be
+# co-located at ../../managed-tools (same depth ratio as the source tree)
+# so the `file:` dep resolves at install time.
 COPY --from=builder /build/managed-tools/package.json /opt/managed-tools/package.json
 COPY --from=builder /build/managed-tools/dist /opt/managed-tools/dist
-WORKDIR /opt/harness
-COPY --from=builder /build/harness/package.json ./
-COPY --from=builder /build/harness/dist ./dist
+WORKDIR /opt/harnesses/claude-agent-sdk
+COPY --from=builder /build/harnesses/claude-agent-sdk/package.json ./
+COPY --from=builder /build/harnesses/claude-agent-sdk/dist ./dist
 RUN npm install --omit=dev --no-audit --no-fund \
-    && chown -R sandbox:sandbox /opt/harness /opt/managed-tools \
+    && chown -R sandbox:sandbox /opt/harnesses /opt/managed-tools \
     # Symlink the SDK's bundled `claude` binary into a stable PATH location
     # so the SDK's auto-resolver finds it regardless of cwd, AND so an agent
     # running inside the sandbox can invoke `claude` as a tool too.
-    && ln -sf /opt/harness/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude \
+    && ln -sf /opt/harnesses/claude-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude \
          /usr/local/bin/claude
 
 WORKDIR /work
-COPY --chown=sandbox:sandbox claude-agent-sdk/entrypoint.sh /entrypoint.sh
+COPY --chown=sandbox:sandbox harnesses/claude-agent-sdk/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
 
 USER sandbox
