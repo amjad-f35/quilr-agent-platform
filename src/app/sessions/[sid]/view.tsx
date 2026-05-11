@@ -30,6 +30,7 @@ import {
   SessionRow,
   api,
   getAgent,
+  getSandboxLogs,
   getSession,
   listSessionMessages,
   sendMessageStream,
@@ -722,13 +723,19 @@ function MainPanel({
             <div className="text-[13px] text-gray-400">Loading…</div>
           )}
           {!loading && session && statusLabel === "creating" && (
-            <SpawnProgress session={session} />
+            <div className="flex flex-col gap-4 max-w-md mx-auto w-full">
+              <SpawnProgress session={session} />
+              <SandboxLogs sessionId={session.id} isCreating={true} />
+            </div>
           )}
           {!loading &&
             session &&
             statusLabel === "failed" &&
             session.failure_reason && (
-              <SpawnFailed reason={session.failure_reason} />
+              <div className="flex flex-col gap-4 max-w-md mx-auto w-full">
+                <SpawnFailed reason={session.failure_reason} />
+                <SandboxLogs sessionId={session.id} isCreating={false} />
+              </div>
             )}
           {!loading &&
             messages.length === 0 &&
@@ -1263,4 +1270,129 @@ function formatElapsed(ms: number): string {
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return `${m}m ${s}s`;
+}
+
+// =====================================================================
+// SANDBOX LOGS — live tail of the harness pod's stdout/stderr
+// =====================================================================
+
+// Poll cadence for the log tail. ~1.5s keeps the experience feeling live
+// without hammering the apiserver during long cold-spawns. Each tick
+// requests only the last 10 min / 500 lines so a slow K8s endpoint can't
+// land a giant payload on us.
+const SANDBOX_LOG_POLL_INTERVAL_MS = 1_500;
+const SANDBOX_LOG_SINCE_SECONDS = 600;
+const SANDBOX_LOG_TAIL_LINES = 500;
+
+interface SandboxLogsProps {
+  sessionId: string;
+  /**
+   * True while the session is still spinning up. The component polls only
+   * while this is true; when it flips to false it renders one final
+   * snapshot of whatever it has and stops fetching.
+   */
+  isCreating: boolean;
+}
+
+function SandboxLogs({ sessionId, isCreating }: SandboxLogsProps) {
+  const [logText, setLogText] = useState<string>("");
+  const preRef = useRef<HTMLPreElement | null>(null);
+
+  // Keep the latest text snapshot reachable from the unmount cleanup so a
+  // late-arriving fetch resolution can't trample state after teardown.
+  const mountedRef = useRef<boolean>(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionId || !isCreating) return;
+    // Track the in-flight fetch so unmounting (or status flipping to
+    // ready/failed) tears it down — otherwise we leak network handles and
+    // get React "set state on unmounted component" warnings.
+    let cancelled = false;
+    let timerId: number | null = null;
+    let inflight: AbortController | null = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+      const ctl = new AbortController();
+      inflight = ctl;
+      try {
+        const text = await getSandboxLogs(sessionId, {
+          sinceSeconds: SANDBOX_LOG_SINCE_SECONDS,
+          tailLines: SANDBOX_LOG_TAIL_LINES,
+          signal: ctl.signal,
+        });
+        if (cancelled || !mountedRef.current) return;
+        setLogText(text);
+      } catch (e) {
+        // AbortError on teardown is expected — swallow. Other errors leave
+        // the previous snapshot in place; the next tick will retry.
+        if ((e as { name?: string })?.name === "AbortError") return;
+        console.warn("sandbox_logs poll failed", e);
+      } finally {
+        if (inflight === ctl) inflight = null;
+        if (!cancelled && mountedRef.current) {
+          timerId = window.setTimeout(tick, SANDBOX_LOG_POLL_INTERVAL_MS);
+        }
+      }
+    };
+    void tick();
+
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+      inflight?.abort();
+    };
+  }, [sessionId, isCreating]);
+
+  // Auto-scroll to bottom on every text update so new lines stay visible.
+  // We unconditionally pin to bottom (no "user scrolled up" affordance)
+  // because the panel is small (240px) and the use case is "watch it boot,"
+  // not "scroll back through history."
+  useEffect(() => {
+    const el = preRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logText]);
+
+  const empty = logText.length === 0;
+
+  return (
+    <div className="rounded-lg border border-gray-200 overflow-hidden bg-white shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-200 bg-gray-50">
+        <span
+          aria-hidden
+          className={`size-1.5 rounded-full ${
+            isCreating ? "bg-emerald-500 animate-pulse" : "bg-gray-300"
+          }`}
+        />
+        <span className="mono text-[11px] text-gray-500">sandbox stdout</span>
+        <span className="mono text-[11px] text-gray-400 ml-auto">
+          {isCreating ? "tail -f" : "snapshot"}
+        </span>
+      </div>
+      <pre
+        ref={preRef}
+        className="mono text-[11px] leading-snug whitespace-pre-wrap break-words px-3 py-2 overflow-y-auto"
+        style={{
+          height: 240,
+          backgroundColor: "#1c1b18",
+          color: "#e8e4dc",
+        }}
+      >
+        {empty ? (
+          <span className="text-gray-500 italic">
+            Waiting for sandbox to start logging…
+          </span>
+        ) : (
+          logText
+        )}
+      </pre>
+    </div>
+  );
 }
