@@ -21,7 +21,10 @@ After Render finishes provisioning, fill these on the dashboard
 |----------------------|-------------------------------------------------------------|
 | `LITELLM_API_BASE`   | OpenAI-compatible `/chat/completions` endpoint (LiteLLM Cloud, your own LiteLLM proxy — anything that speaks OpenAI's wire format) |
 | `LITELLM_API_KEY`    | API key for the above                                       |
-| `KUBE_CONFIG_B64`    | base64-encoded kubeconfig for your sandbox cluster          |
+| `KUBE_CONFIG_B64`    | base64-encoded kubeconfig from `bin/eks-up.sh` (exec-plugin — never expires) |
+| `AWS_ACCESS_KEY_ID`  | the same IAM principal that ran `bin/eks-up.sh` — `aws-iam-authenticator` re-reads these on every k8s API call |
+| `AWS_SECRET_ACCESS_KEY` |                                                          |
+| `AWS_REGION`         | EKS cluster region, e.g. `us-east-1`                        |
 | `K8S_NODE_HOST`      | `auto` (recommended — discover at request time) or stable LB hostname |
 | `K8S_HARNESS_IMAGE`  | registry path of `opencode-sandbox:<tag>` your cluster pulls |
 
@@ -52,19 +55,19 @@ knowing about before you start.
 - **Egress is unpinned.** If your cluster apiserver / NodePort range is
   IP-allowlisted, buy Render's static-egress add-on or front the cluster
   with a public LB.
-- **Kubeconfig token rotation.** Short-lived tokens (`aws eks get-token`)
-  won't work — bake a static service-account token into the kubeconfig
-  before encoding.
+- **Auth runs via `aws-iam-authenticator` at every k8s API call.** The
+  kubeconfig is an exec-plugin block — the binary mints a fresh token
+  from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` on each request.
+  The binary itself is installed by
+  [`bin/install-aws-iam-authenticator.sh`](../../bin/install-aws-iam-authenticator.sh),
+  invoked from both the Dockerfile (web) and `render.yaml`'s
+  `buildCommand` (worker). If you fork either, keep that step.
 - **First deploy will fail until you fill the `sync: false` vars.** That's
   expected — Render kicks off a build immediately, redeploy after pasting.
 - **`npm ci` under `NODE_ENV=production` skips devDependencies.** The
   build commands in [`render.yaml`](../../render.yaml) pass
   `--include=dev` to keep Tailwind / Turbopack / tsx available. Don't
   drop the flag.
-- **EKS service-account tokens expire after 24h.** Re-run
-  [`bin/eks-up.sh`](../../bin/eks-up.sh) and `PUT` the new
-  `KUBE_CONFIG_B64` onto both Render services on a daily cron. Or move
-  to IRSA if you can.
 - **Stale `ready` rows poison the first request after re-pointing the
   cluster.** If the database previously served a different sandbox
   runtime (local kind, prior cluster), `Session` rows will have
