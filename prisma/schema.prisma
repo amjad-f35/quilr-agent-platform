@@ -1,5 +1,6 @@
 // Lean v0 schema for managed agents on Fargate.
 // 2 tables: Agent (config) + Session (live Fargate task instance).
+// Plus 3 tables for the integrations subsystem (see src/server/integrations/).
 // Snake_case columns to match upstream LiteLLM Prisma conventions in case
 // this DB is shared with the Python proxy.
 
@@ -28,8 +29,9 @@ model Agent {
   created_at          DateTime @default(now())
   created_by          String?
 
-  sessions   Session[]
-  warm_tasks WarmTask[]
+  sessions             Session[]
+  warm_tasks           WarmTask[]
+  integration_bindings AgentIntegrationBinding[]
 
   @@index([created_by])
   @@map("managed_agent")
@@ -50,7 +52,8 @@ model Session {
   last_seen_at       DateTime?
   stopped_at         DateTime?
 
-  agent Agent @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  agent               Agent               @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  integration_session IntegrationSession?
 
   @@index([agent_id])
   @@index([status])
@@ -85,4 +88,74 @@ model WarmTask {
   // Sweeps: TTL recycle, orphan detection.
   @@index([status, created_at])
   @@map("managed_agent_warm_task")
+}
+
+// =============================================================================
+// Integrations subsystem (src/server/integrations/)
+// =============================================================================
+// Three tables let any external medium (Linear, Slack, GitHub, ...) delegate
+// work to an Agent and stream activity back. The integration_id column is a
+// string discriminator — one row in src/server/integrations/providers/ per
+// distinct value. Adding a new medium requires no Agent schema migration.
+// =============================================================================
+
+/// One row per OAuth install (per workspace, per integration). Owns the
+/// access + refresh tokens for talking back to the medium's API. Tokens are
+/// AES-GCM encrypted at rest by core/crypto.ts when INTEGRATION_TOKEN_KEY is
+/// configured (required in production).
+model IntegrationInstall {
+  install_id     String    @id @default(uuid())
+  integration_id String    // "linear" | "slack" | "github" | ...
+  workspace_id   String    // medium's org/team id (e.g. Linear organizationId)
+  workspace_name String
+  access_token   String    // encrypted
+  refresh_token  String?   // encrypted
+  expires_at     DateTime?
+  metadata       Json      @default("{}") // medium-specific extras: app_user_id, bot_user_id, etc.
+  created_at     DateTime  @default(now())
+  created_by     String?
+
+  bindings AgentIntegrationBinding[]
+
+  @@unique([integration_id, workspace_id])
+  @@map("integration_install")
+}
+
+/// Binds one Agent to one IntegrationInstall. The presence of an enabled row
+/// is "this agent is reachable via this integration" — there is no boolean
+/// column on Agent. Add a new integration without an Agent schema migration.
+model AgentIntegrationBinding {
+  binding_id String   @id @default(uuid())
+  agent_id   String
+  install_id String
+  enabled    Boolean  @default(true)
+  config     Json     @default("{}") // per-binding tunables (e.g. team scope filters)
+  created_at DateTime @default(now())
+
+  agent             Agent                @relation(fields: [agent_id],   references: [agent_id],   onDelete: Cascade)
+  install           IntegrationInstall   @relation(fields: [install_id], references: [install_id], onDelete: Cascade)
+  external_sessions IntegrationSession[]
+
+  @@unique([agent_id, install_id])
+  @@index([install_id])
+  @@map("agent_integration_binding")
+}
+
+/// Maps a medium's session id (e.g. Linear agentSession.id) to a LAP Session.
+/// Written by the dispatcher when a "new_task" event creates a Session;
+/// looked up by "followup" / "cancel" events to find the right LAP session.
+model IntegrationSession {
+  external_session_id String   @id        // medium's id
+  session_id          String   @unique    // LAP managed_agent_session.session_id
+  binding_id          String
+  external_ref        String?             // "LIT-1234", PR url, etc. — for logs
+  last_status         String?             // last Session.status we forwarded as an activity
+  last_pr_url         String?
+  created_at          DateTime @default(now())
+
+  session Session                 @relation(fields: [session_id], references: [session_id], onDelete: Cascade)
+  binding AgentIntegrationBinding @relation(fields: [binding_id], references: [binding_id], onDelete: Cascade)
+
+  @@index([binding_id])
+  @@map("integration_session")
 }
