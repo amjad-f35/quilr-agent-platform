@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
+# ---------- 0. aws-iam-authenticator ----------
+# Standalone download + checksum-verify stage so the binary layer is cached
+# independent of node_modules. The runner + worker stages both COPY from
+# this stage. Sandboxes auth to EKS via an exec-plugin kubeconfig that
+# spawns this binary on every request, so it has to be on PATH at runtime.
+FROM alpine:3.20 AS aws-iam-authenticator
+RUN apk add --no-cache bash curl ca-certificates coreutils
+COPY bin/install-aws-iam-authenticator.sh /tmp/install-aws-iam-authenticator.sh
+RUN bash /tmp/install-aws-iam-authenticator.sh /usr/local/bin
+
 # ---------- 1. install ----------
 FROM node:20-alpine AS deps
 WORKDIR /app
@@ -44,6 +54,7 @@ FROM node:20-alpine AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=aws-iam-authenticator /usr/local/bin/aws-iam-authenticator /usr/local/bin/aws-iam-authenticator
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json /app/package-lock.json /app/tsconfig.json ./
 COPY --from=builder /app/prisma ./prisma
@@ -63,6 +74,12 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Sandboxes auth to EKS via an exec-plugin kubeconfig — `aws-iam-authenticator
+# token` is invoked on every k8s API call. Installed into /usr/local/bin so
+# it's on PATH for the non-root nextjs user. World-readable + executable
+# (chmod 0755 by the install script).
+COPY --from=aws-iam-authenticator /usr/local/bin/aws-iam-authenticator /usr/local/bin/aws-iam-authenticator
 
 # Run as non-root.
 RUN addgroup --system --gid 1001 nodejs \
