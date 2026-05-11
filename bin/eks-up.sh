@@ -131,15 +131,23 @@ case "$CALLER_ARN" in
 esac
 
 info "ensuring $MAPPING_ARN is mapped to system:masters in aws-auth"
-# `--no-duplicate-arns` makes this idempotent — re-running the script
-# (e.g. to bump node size) doesn't pile up duplicate mappings.
-silent eksctl create iamidentitymapping \
-  --cluster "$CLUSTER_NAME" \
-  --region "$AWS_REGION" \
-  --arn "$MAPPING_ARN" \
-  --group system:masters \
-  --username "litellm-agents-deployer" \
-  --no-duplicate-arns
+# `eksctl create iamidentitymapping` is *not* idempotent by default — it
+# appends a second record to aws-auth on every run. The `--no-duplicate-
+# arns` flag inverts that to a hard error on dupes (still not what we
+# want). Check first, then create only if missing.
+if silent eksctl get iamidentitymapping \
+     --cluster "$CLUSTER_NAME" \
+     --region "$AWS_REGION" \
+     --arn "$MAPPING_ARN"; then
+  info "  $MAPPING_ARN already mapped — skipping"
+else
+  silent eksctl create iamidentitymapping \
+    --cluster "$CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --arn "$MAPPING_ARN" \
+    --group system:masters \
+    --username "litellm-agents-deployer"
+fi
 
 # ---- 5. Exec-plugin kubeconfig ------------------------------------------
 # The kubernetes-client-node library invokes `aws-iam-authenticator token`
