@@ -192,6 +192,10 @@ export interface ApiSession {
   // alongside last_seen_at so the UI shows an accurate countdown without
   // hardcoding the constant.
   idle_timeout_ms: number;
+  // Populated when status flips to `failed`. The UI surfaces this verbatim
+  // on the session page so the user can see why bring-up died instead of
+  // staring at a stuck "creating" spinner.
+  failure_reason: string | null;
 }
 
 // Admin / observability — wire shape returned by GET /api/v1/admin/stats.
@@ -520,6 +524,7 @@ export function toApiSession(
     created_at: row.created_at.toISOString(),
     last_seen_at: row.last_seen_at ? row.last_seen_at.toISOString() : null,
     idle_timeout_ms: SESSION_IDLE_TIMEOUT_MS,
+    failure_reason: row.failure_reason ?? null,
   };
 }
 
