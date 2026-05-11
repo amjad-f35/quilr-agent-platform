@@ -8,6 +8,11 @@
  *
  * That's the whole rule. No dynamic file scanning — explicit imports keep
  * the dependency tree obvious and play well with Next.js bundling.
+ *
+ * Per-agent model: every registered provider is always "available". Whether
+ * a given agent can use the provider depends on whether the operator has
+ * created an `AgentIntegrationConfig` row for that (agent, integration) pair.
+ * The registry no longer filters by env-derived enabled state.
  */
 
 import linear from "../providers/linear";
@@ -15,24 +20,12 @@ import type { Integration } from "./types";
 
 const ALL: Integration[] = [linear];
 
-/** Every registered provider, including the disabled ones (their config is incomplete). */
+/** Every registered provider. UI surfaces all of these as options. */
 export function listProviders(): Integration[] {
   return [...ALL];
 }
 
-/** Every provider whose `enabled()` returns true. Use this for routing. */
-export function listEnabledProviders(): Integration[] {
-  return ALL.filter((p) => p.enabled());
-}
-
-/**
- * Lookup by id. Returns undefined if the id is unknown OR if the provider is
- * registered but its `enabled()` returns false — callers should treat both
- * cases as "this integration isn't available", typically with a 404.
- */
+/** Lookup by id. Returns undefined if the id is unknown. */
 export function getProvider(id: string): Integration | undefined {
-  const p = ALL.find((x) => x.id === id);
-  if (!p) return undefined;
-  if (!p.enabled()) return undefined;
-  return p;
+  return ALL.find((x) => x.id === id);
 }

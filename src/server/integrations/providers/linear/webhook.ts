@@ -5,35 +5,22 @@
  * signing secret configured on the OAuth app. The signature lives in the
  * `linear-signature` header as a lowercase hex digest.
  *
+ * Per-agent model: the secret comes from `AgentIntegrationConfig` — the
+ * dispatcher decrypts it and passes it in via `verify(... , ctx)`. No env
+ * vars touched here.
+ *
  * Payloads we care about: `AgentSessionEvent` with `action: "created"`
  * (delegation start) or `"prompted"` (followup comment). Everything else
  * gets translated to `{ kind: "ignore" }` so the dispatcher 204s out.
- *
- * Dedup loop: Linear also fires webhooks for the agent's own
- * `agentActivityCreate` calls. We compare `appUserId` on the payload against
- * the stored `app_user_id` in `IntegrationInstall.metadata` and ignore
- * matches — otherwise the integration would feedback-loop on itself.
  */
 
 import { createHmac } from "node:crypto";
 import { safeEqual } from "../../core/crypto";
 import type { IntegrationInstall } from "@prisma/client";
-import type {
-  IntegrationEvent,
-  WebhookAdapter,
-} from "../../core/types";
+import type { IntegrationEvent, WebhookAdapter } from "../../core/types";
 import { issueToPrompt } from "./prompt";
 
 const SIGNATURE_HEADER = "linear-signature";
-
-/**
- * Read the webhook signing secret from env. Set by the operator when they
- * create the Linear OAuth app — same value across all workspaces that
- * install the app.
- */
-function getSigningSecret(): string | null {
-  return process.env.LINEAR_WEBHOOK_SECRET ?? null;
-}
 
 interface LinearAgentSession {
   id?: string;
@@ -63,12 +50,10 @@ export function buildWebhookAdapter(): WebhookAdapter {
       return typeof p?.organizationId === "string" ? p.organizationId : null;
     },
 
-    verify(rawBody, headers, _install): boolean {
-      const secret = getSigningSecret();
-      if (!secret) return false;
+    verify(rawBody, headers, ctx): boolean {
       const got = headers.get(SIGNATURE_HEADER);
       if (!got) return false;
-      const expected = createHmac("sha256", secret)
+      const expected = createHmac("sha256", ctx.webhookSecret)
         .update(rawBody)
         .digest("hex");
       return safeEqual(got, expected);
@@ -82,8 +67,8 @@ export function buildWebhookAdapter(): WebhookAdapter {
       if (!externalSessionId) return { kind: "ignore" };
 
       if (evt.action === "created") {
-        // Delegation start. No self-echo concern — Linear only fires
-        // `created` on a fresh agent session (user-initiated).
+        // Delegation start. Linear only fires `created` on a fresh agent
+        // session (user-initiated) — no self-echo concern.
         return {
           kind: "new_task",
           external_session_id: externalSessionId,
@@ -96,12 +81,10 @@ export function buildWebhookAdapter(): WebhookAdapter {
         const body = evt.agentActivity?.body?.trim();
         if (!body) return { kind: "ignore" };
 
-        // Dedup self-echo: if Linear ever fires a `prompted` event whose
-        // agentActivity was created by our own app-user, ignore it so the
-        // dispatcher doesn't feedback-loop on the agent's own output.
-        // Top-level `appUserId` on the payload identifies the recipient,
-        // not the source — we use `agentActivity.userId` here, which is
-        // the activity's creator when Linear sends one.
+        // Dedup self-echo: if the activity was created by our own app-user,
+        // ignore it so we don't feedback-loop on the agent's own output.
+        // Top-level `appUserId` is the recipient, not the source — use
+        // `agentActivity.userId` (the activity's creator).
         const appUserId = (install.metadata as Record<string, unknown>)
           ?.app_user_id;
         const activityUserId = evt.agentActivity?.userId;

@@ -878,3 +878,95 @@ export function harnessResponseText(
   }
   return out.join("");
 }
+
+// ============================================================================
+// Per-agent integrations (Linear, Slack, GitHub, …)
+// ============================================================================
+
+export interface IntegrationInstallRow {
+  install_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface IntegrationStatus {
+  configured: boolean;
+  enabled: boolean;
+  client_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  webhook_url: string;
+  installs: IntegrationInstallRow[];
+}
+
+export interface SaveIntegrationBody {
+  client_id: string;
+  client_secret: string;
+  webhook_secret: string;
+  enabled?: boolean;
+}
+
+function integrationPath(agentId: string, integrationId: string): string {
+  return `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/integrations/${encodeURIComponent(integrationId)}`;
+}
+
+/** GET the agent's config for one integration (no secrets returned). */
+export async function getIntegration(
+  agentId: string,
+  integrationId: string,
+): Promise<IntegrationStatus> {
+  return api<IntegrationStatus>("GET", integrationPath(agentId, integrationId));
+}
+
+/** Create or update the agent's config for one integration. */
+export async function saveIntegration(
+  agentId: string,
+  integrationId: string,
+  body: SaveIntegrationBody,
+): Promise<IntegrationStatus> {
+  return api<IntegrationStatus>("PUT", integrationPath(agentId, integrationId), body);
+}
+
+/** Delete the config (cascades to installs + integration_sessions). */
+export async function deleteIntegration(
+  agentId: string,
+  integrationId: string,
+): Promise<void> {
+  await api<{ ok: true }>("DELETE", integrationPath(agentId, integrationId));
+}
+
+/**
+ * Ask the server for the provider's authorize URL. The server mints a CSRF
+ * state bound to (agent_id, integration_id) and uses the agent's stored
+ * client_id. Caller then `window.location.assign`s the URL.
+ *
+ * Direct fetch because the authorize endpoint lives under /api/integrations/,
+ * not /api/v1/.
+ */
+export async function getIntegrationAuthorizeUrl(
+  agentId: string,
+  integrationId: string,
+): Promise<string> {
+  const key = getStoredMasterKey();
+  if (!key) throw new ApiError(401, "Not signed in", "Not signed in");
+  const res = await fetch(
+    `/api/integrations/oauth/${encodeURIComponent(integrationId)}/${encodeURIComponent(agentId)}/authorize`,
+    {
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${key}`,
+      },
+    },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({ error: res.statusText }))) as {
+      error?: string;
+    };
+    const msg = body.error ?? `HTTP ${res.status}`;
+    throw new ApiError(res.status, body, msg);
+  }
+  const json = (await res.json()) as { url: string };
+  return json.url;
+}

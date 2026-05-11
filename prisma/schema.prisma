@@ -32,7 +32,8 @@ model Agent {
   sessions             Session[]
   warm_tasks           WarmTask[]
   memories             Memory[]
-  integration_bindings AgentIntegrationBinding[]
+  integration_configs  AgentIntegrationConfig[]
+  integration_installs IntegrationInstall[]
 
   @@index([created_by])
   @@map("managed_agent")
@@ -84,41 +85,27 @@ model WarmTask {
 
   agent Agent @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
 
-  // Primary claim path: oldest warm row for this agent.
   @@index([agent_id, status, ready_at])
-  // Sweeps: TTL recycle, orphan detection.
   @@index([status, created_at])
   @@map("managed_agent_warm_task")
 }
 
-// Per-agent durable memory. One row = one lesson the agent should apply on
-// future runs ("for UI changes use shadcn Tag", "PR titles start with fix:").
-// Read paths:
-//   1. Top-10 by priority+usage pre-loaded into AGENT_PROMPT at warm-task
-//      launch (instinctive awareness).
-//   2. Searched on demand via /memory?q=... — grep-style ILIKE + tag intersect.
-//      Mandatory checkpoint before the agent finalizes a PR.
-// Write paths:
-//   - Agent tool save_memory (source=agent) — model decides during run.
-//   - Slack `remember:` prefix → shin → LAP API (source=slack).
-//   - Direct UI (source=ui).
-// On any write/update/disable: invalidateWarmTasks(agent_id) marks all warm
-// tasks dead so the pool re-provisions with a fresh pre-loaded prompt.
+// Per-agent durable memory.
 model Memory {
   memory_id         String   @id @default(uuid())
   agent_id          String
   text              String
 
-  tags              String[]                       // 1-4 short labels (ui, antd, security, …)
-  type              String   @default("convention") // convention | constraint | reference | preference
+  tags              String[]
+  type              String   @default("convention")
 
-  priority          Int      @default(0)           // higher = listed first in prompt + UI
-  disabled          Boolean  @default(false)       // soft-hide from prompt and search
+  priority          Int      @default(0)
+  disabled          Boolean  @default(false)
 
-  times_applied     Int      @default(0)           // bumped each time search_memory returns this row
+  times_applied     Int      @default(0)
   last_applied_at   DateTime?
 
-  source            String   @default("agent")     // agent | slack | ui
+  source            String   @default("agent")
   source_user_id    String?
   source_session_id String?
   source_thread_ts  String?
@@ -128,7 +115,6 @@ model Memory {
 
   agent Agent @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
 
-  // Primary read path: active memories for an agent, ordered by priority.
   @@index([agent_id, disabled, priority])
   @@map("managed_agent_memory")
 }
@@ -136,69 +122,75 @@ model Memory {
 // =============================================================================
 // Integrations subsystem (src/server/integrations/)
 // =============================================================================
-// Three tables let any external medium (Linear, Slack, GitHub, ...) delegate
-// work to an Agent and stream activity back. The integration_id column is a
-// string discriminator — one row in src/server/integrations/providers/ per
-// distinct value. Adding a new medium requires no Agent schema migration.
+// Three tables let external mediums (Linear, Slack, GitHub, ...) delegate work
+// to an Agent and stream activity back. Each agent has its own OAuth app per
+// medium — credentials live on AgentIntegrationConfig (not env vars), so one
+// LAP deployment can host N delegateable agents each appearing as a distinct
+// app-user in the medium.
 // =============================================================================
 
-/// One row per OAuth install (per workspace, per integration). Owns the
-/// access + refresh tokens for talking back to the medium's API. Tokens are
-/// AES-GCM encrypted at rest by core/crypto.ts when INTEGRATION_TOKEN_KEY is
-/// configured (required in production).
+/// Per-agent OAuth-app credentials for one medium. Created when the operator
+/// pastes their Linear app's `client_id`, `client_secret`, `webhook_secret`
+/// in the agent's Integrations panel. `enabled = false` keeps the row but
+/// makes the routes reject inbound webhooks and OAuth attempts.
+///
+/// Secrets are AES-256-GCM encrypted at rest by core/crypto.ts when
+/// INTEGRATION_TOKEN_KEY is configured (required in production).
+model AgentIntegrationConfig {
+  agent_id           String
+  integration_id     String                          // "linear" | "slack" | "github" | ...
+  enabled            Boolean   @default(true)
+  client_id          String                          // OAuth client id (public — not encrypted)
+  client_secret_enc  String                          // encrypted
+  webhook_secret_enc String                          // encrypted
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+  created_by         String?
+
+  agent    Agent                @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  installs IntegrationInstall[]
+
+  @@id([agent_id, integration_id])
+  @@map("agent_integration_config")
+}
+
+/// One OAuth install per (agent, medium, workspace). The (agent_id,
+/// integration_id) pair is a composite FK back to AgentIntegrationConfig.
 model IntegrationInstall {
   install_id     String    @id @default(uuid())
-  integration_id String    // "linear" | "slack" | "github" | ...
-  workspace_id   String    // medium's org/team id (e.g. Linear organizationId)
+  agent_id       String
+  integration_id String
+  workspace_id   String
   workspace_name String
   access_token   String    // encrypted
   refresh_token  String?   // encrypted
   expires_at     DateTime?
-  metadata       Json      @default("{}") // medium-specific extras: app_user_id, bot_user_id, etc.
+  metadata       Json      @default("{}") // medium extras: app_user_id, bot_user_id, etc.
   created_at     DateTime  @default(now())
   created_by     String?
 
-  bindings AgentIntegrationBinding[]
+  agent             Agent                  @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  config            AgentIntegrationConfig @relation(fields: [agent_id, integration_id], references: [agent_id, integration_id], onDelete: Cascade)
+  external_sessions IntegrationSession[]
 
-  @@unique([integration_id, workspace_id])
+  @@unique([agent_id, integration_id, workspace_id])
+  @@index([agent_id, integration_id])
   @@map("integration_install")
 }
 
-/// Binds one Agent to one IntegrationInstall. The presence of an enabled row
-/// is "this agent is reachable via this integration" — there is no boolean
-/// column on Agent. Add a new integration without an Agent schema migration.
-model AgentIntegrationBinding {
-  binding_id String   @id @default(uuid())
-  agent_id   String
-  install_id String
-  enabled    Boolean  @default(true)
-  config     Json     @default("{}") // per-binding tunables (e.g. team scope filters)
-  created_at DateTime @default(now())
-
-  agent             Agent                @relation(fields: [agent_id],   references: [agent_id],   onDelete: Cascade)
-  install           IntegrationInstall   @relation(fields: [install_id], references: [install_id], onDelete: Cascade)
-  external_sessions IntegrationSession[]
-
-  @@unique([agent_id, install_id])
-  @@index([install_id])
-  @@map("agent_integration_binding")
-}
-
 /// Maps a medium's session id (e.g. Linear agentSession.id) to a LAP Session.
-/// Written by the dispatcher when a "new_task" event creates a Session;
-/// looked up by "followup" / "cancel" events to find the right LAP session.
 model IntegrationSession {
   external_session_id String   @id        // medium's id
   session_id          String   @unique    // LAP managed_agent_session.session_id
-  binding_id          String
-  external_ref        String?             // "LIT-1234", PR url, etc. — for logs
-  last_status         String?             // last Session.status we forwarded as an activity
+  install_id          String
+  external_ref        String?             // "LIT-1234", PR url — for logs
+  last_status         String?
   last_pr_url         String?
   created_at          DateTime @default(now())
 
-  session Session                 @relation(fields: [session_id], references: [session_id], onDelete: Cascade)
-  binding AgentIntegrationBinding @relation(fields: [binding_id], references: [binding_id], onDelete: Cascade)
+  session Session            @relation(fields: [session_id], references: [session_id], onDelete: Cascade)
+  install IntegrationInstall @relation(fields: [install_id], references: [install_id], onDelete: Cascade)
 
-  @@index([binding_id])
+  @@index([install_id])
   @@map("integration_session")
 }

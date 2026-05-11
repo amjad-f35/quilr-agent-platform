@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { PfpUpload } from "@/components/pfp-upload";
 import { CallAgentSnippets } from "@/components/call-agent-snippets";
+import { IntegrationSection } from "@/components/integration-section";
 import {
   AgentRow,
   ApiError,
@@ -303,6 +304,9 @@ export default function AgentDetailPage({ params }: PageProps) {
               </dd>
             </dl>
           </section>
+
+          {/* Integrations */}
+          <IntegrationSection agentId={agent.id} />
 
           {/* Sessions */}
           <section className="mt-8">
