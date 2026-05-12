@@ -917,12 +917,31 @@ function AssistantBlock({ msg }: { msg: LocalMessage }) {
   const parts = msg.parts ?? [];
 
   // Render parts in order. Skip step-start/step-finish — internal markers
-  // with no UI affordance. Group consecutive text parts so markdown lists
-  // still render correctly.
-  const visibleParts = parts.filter((p) => {
+  // with no UI affordance.
+  //
+  // Also dedup consecutive text/thinking parts whose text payload is
+  // byte-identical. The harness sometimes emits the same content block
+  // under two different partIDs (the SDK `assistant` event allocates a
+  // fresh globalIdx when its matching `stream_event content_block_start`
+  // hadn't fired yet — see harnesses/claude-agent-sdk/src/server.ts), and
+  // the streaming `partsState` map keys on partID so both copies survive
+  // into the rendered parts array. Drop the duplicate at render time so
+  // the assistant turn doesn't paint the same paragraph twice.
+  const rawVisible = parts.filter((p) => {
     const t = typeof p?.type === "string" ? p.type : "";
     return t === "text" || t === "reasoning" || t === "thinking" || t === "tool";
   });
+  const visibleParts: HarnessMessagePart[] = [];
+  const seenTextKey = new Set<string>();
+  for (const p of rawVisible) {
+    const t = typeof p?.type === "string" ? p.type : "";
+    if (t === "text" || t === "thinking" || t === "reasoning") {
+      const key = `${t}::${typeof p.text === "string" ? p.text : ""}`;
+      if (seenTextKey.has(key)) continue;
+      seenTextKey.add(key);
+    }
+    visibleParts.push(p);
+  }
 
   return (
     <div
@@ -1064,71 +1083,74 @@ function ReasoningBlock({ text }: { text: string }) {
   );
 }
 
+// Tool call card. Mirrors the visual contract of the (now-removed)
+// SdkStreamPanel: a framed card with the tool name + status icon, the
+// input JSON pretty-printed underneath, and the output (or error) in a
+// trailing block colored by success/failure. Default-expanded — users
+// were asking to see input/output without an extra click.
 function ToolBlock({ part }: { part: HarnessMessagePart }) {
-  const [open, setOpen] = useState(false);
-  const toolName =
-    typeof part.tool === "string" ? part.tool : "tool";
+  const toolName = typeof part.tool === "string" ? part.tool : "tool";
   const state = (part.state as Record<string, unknown> | undefined) ?? {};
   const status =
     typeof state.status === "string" ? state.status : "unknown";
   const input = state.input;
   const output = state.output;
-  const hasDetails = input !== undefined || output !== undefined;
+  const errorOut = state.error;
+  const isError = status === "error" || errorOut !== undefined;
+  const isRunning = status === "running";
+  const isDone = status === "completed";
 
-  const statusColor =
-    status === "completed"
-      ? "text-emerald-600"
-      : status === "error"
-        ? "text-red-600"
-        : status === "running"
-          ? "text-amber-600"
-          : "text-gray-500";
+  const inputStr =
+    input === undefined
+      ? ""
+      : typeof input === "string"
+        ? input
+        : JSON.stringify(input, null, 2);
+  const outputStr =
+    output === undefined
+      ? errorOut === undefined
+        ? ""
+        : typeof errorOut === "string"
+          ? errorOut
+          : JSON.stringify(errorOut, null, 2)
+      : typeof output === "string"
+        ? output
+        : JSON.stringify(output, null, 2);
 
   return (
-    <div className="border border-gray-200 rounded-md bg-gray-50/60 text-[13px]">
-      <button
-        type="button"
-        onClick={() => hasDetails && setOpen((v) => !v)}
-        className={`w-full flex items-center gap-2 px-3 py-2 text-left ${
-          hasDetails ? "hover:bg-gray-100 cursor-pointer" : "cursor-default"
-        }`}
-      >
-        <Wrench className="w-3 h-3 text-gray-500 shrink-0" />
-        <span className="mono text-gray-700">{toolName}</span>
-        <span className={`mono text-[11px] ${statusColor}`}>{status}</span>
-        {hasDetails && (
-          <ChevronDown
-            className={`ml-auto w-3 h-3 text-gray-400 transition-transform ${
-              open ? "" : "-rotate-90"
-            }`}
-          />
+    <div className="rounded-md border border-gray-200 bg-white text-[13px] text-gray-700 overflow-hidden">
+      <div className="px-3 py-2 flex items-center gap-2 border-b border-gray-100">
+        <Wrench className="w-3 h-3 text-gray-400 shrink-0" />
+        <span className="mono text-[12px] text-gray-700">{toolName}</span>
+        {isRunning && (
+          <Loader2 className="ml-auto w-3 h-3 text-amber-500 animate-spin" />
         )}
-      </button>
-      {open && hasDetails && (
-        <div className="border-t border-gray-200 px-3 py-2 flex flex-col gap-2">
-          {input !== undefined && (
-            <ToolKv label="input" value={input} />
-          )}
-          {output !== undefined && (
-            <ToolKv label="output" value={output} />
-          )}
-        </div>
+        {!isRunning && isDone && (
+          <span className="ml-auto text-emerald-600 text-[12px] leading-none">
+            ✓
+          </span>
+        )}
+        {!isRunning && isError && (
+          <span className="ml-auto text-red-600 text-[12px] leading-none">
+            ✗
+          </span>
+        )}
+      </div>
+      {inputStr && (
+        <pre className="px-3 py-2 mono text-[11px] text-gray-600 whitespace-pre-wrap break-words m-0 max-h-64 overflow-auto">
+          {inputStr}
+        </pre>
       )}
-    </div>
-  );
-}
-
-function ToolKv({ label, value }: { label: string; value: unknown }) {
-  const text =
-    typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="mono text-[10px] uppercase tracking-wide text-gray-400">
-        {label}
-      </span>
-      <pre className="mono text-[11px] text-gray-700 whitespace-pre-wrap break-words bg-white border border-gray-200 rounded p-2 max-h-64 overflow-auto">
-        {text}
-      </pre>
+      {outputStr && (
+        <pre
+          className={
+            "px-3 py-2 mono text-[11px] whitespace-pre-wrap break-words m-0 border-t border-gray-100 max-h-64 overflow-auto " +
+            (isError ? "text-red-700 bg-red-50" : "text-gray-600")
+          }
+        >
+          {outputStr}
+        </pre>
+      )}
     </div>
   );
 }
