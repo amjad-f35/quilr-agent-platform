@@ -19,7 +19,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # semgrep (pinned)
 RUN pip3 install --no-cache-dir --break-system-packages semgrep==1.72.0
 
-# gitleaks (pinned) — download binary + verify SHA-256 checksum before extracting
+# gitleaks (pinned) — download and verify SHA-256 checksum before extracting
 RUN set -eux; \
     ARCH=$(dpkg --print-architecture); \
     GITLEAKS_VERSION=8.18.4; \
@@ -33,14 +33,35 @@ RUN set -eux; \
     rm /tmp/gitleaks.tar.gz /tmp/gitleaks_checksums.txt
 
 WORKDIR /app
-# Build context is repo root — copy from harness subdirectory
-COPY harnesses/claude-agent-sdk/package*.json ./
-COPY harnesses/claude-agent-sdk/package-lock.json* ./
-RUN npm install --omit=dev --legacy-peer-deps
+# Copy pre-built node_modules from host; overwrite the @lap/managed-tools symlink
+# with the real directory so Node can resolve it at runtime.
+COPY harnesses/claude-agent-sdk/package.json ./
+COPY harnesses/claude-agent-sdk/node_modules/ ./node_modules/
+COPY managed-tools/ ./node_modules/@lap/managed-tools/
+
+# Install platform-native claude binary (npm install for just this one package avoids
+# the file: dep resolution bug that affects full npm install).
+RUN arch=$(uname -m) && \
+    if [ "$arch" = "aarch64" ]; then \
+      npm install @anthropic-ai/claude-agent-sdk-linux-arm64 --no-save --legacy-peer-deps; \
+    else \
+      npm install @anthropic-ai/claude-agent-sdk-linux-x64 --no-save --legacy-peer-deps; \
+    fi
 
 COPY harnesses/claude-agent-sdk/dist/ ./dist/
+
+# Run as non-root — claude's --dangerously-skip-permissions (bypassPermissions) is
+# blocked when running as root/sudo for security reasons.
+RUN useradd -m -u 1001 agent
+USER agent
+WORKDIR /home/agent
+# Re-copy app files with correct ownership
+RUN cp -r /app/node_modules ./node_modules && cp -r /app/dist ./dist && cp /app/package.json .
 
 ENV PORT=4096
 EXPOSE 4096
 
-CMD ["node", "dist/server.js"]
+# Entrypoint writes ~/.claude/settings.json from runtime env vars.
+RUN printf '#!/bin/sh\nmkdir -p ~/.claude\nprintf '"'"'{"env":{"ANTHROPIC_BASE_URL":"%s","ANTHROPIC_AUTH_TOKEN":"%s","ANTHROPIC_API_KEY":"%s"}}'"'"' \\\n  "${LITELLM_API_BASE%%/}" "${LITELLM_API_KEY}" "${LITELLM_API_KEY}" \\\n  > ~/.claude/settings.json\nexec node /home/agent/dist/server.js\n' > /home/agent/entrypoint.sh && chmod +x /home/agent/entrypoint.sh
+
+CMD ["/home/agent/entrypoint.sh"]

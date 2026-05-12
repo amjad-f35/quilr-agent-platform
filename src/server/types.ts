@@ -399,9 +399,6 @@ export interface ServerEnv {
   PLATFORM_INTERNAL_URL: string;
   CONTAINER_PORT: number; // default 4096
   RECONCILE_INTERVAL_SECONDS: number; // default 60
-  // When set, bypasses K8s pod launch; routes all sessions to this URL.
-  LOCAL_SANDBOX_URL?: string;
-
   // Warm pool. WARM_POOL_SIZE = 0 disables the feature entirely; default of
   // 2 keeps two tasks ready for the most-recently-active agent so users
   // get sub-5s session creates out of the box.

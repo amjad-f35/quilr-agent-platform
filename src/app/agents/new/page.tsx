@@ -423,13 +423,23 @@ export default function NewAgentPage() {
         if (key) envVarsRecord[key] = v;
       }
 
-      // If a template is selected and the user edited the skill panel, rebuild
-      // the system prompt from the latest skillEdits so those edits aren't lost.
+      // If a template is selected and the user edited the skill panel, merge the
+      // edited skill back into the current systemPrompt value. We split on the
+      // <!-- skill --> separator so that any edits the user made to the base-prompt
+      // portion of the textarea are preserved — never fall back to the original
+      // template text.
       let finalPrompt = systemPrompt.trim() || undefined;
       if (selectedTemplate) {
         const editedSkill = skillEdits[selectedTemplate.id];
         if (editedSkill !== undefined) {
-          finalPrompt = `${selectedTemplate.prompt}\n\n<!-- skill -->\n\n${editedSkill}`.trim() || undefined;
+          const SEPARATOR = "<!-- skill -->";
+          const separatorIdx = systemPrompt.indexOf(SEPARATOR);
+          const basePrompt =
+            separatorIdx >= 0
+              ? systemPrompt.slice(0, separatorIdx).trimEnd()
+              : systemPrompt.trimEnd();
+          finalPrompt =
+            `${basePrompt}\n\n${SEPARATOR}\n\n${editedSkill}`.trim() || undefined;
         }
       }
 

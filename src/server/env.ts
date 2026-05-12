@@ -49,11 +49,6 @@ const EnvSchema = z.object({
   CONTAINER_PORT: z.coerce.number().int().positive().default(4096),
   RECONCILE_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
 
-  // When set, session creates skip K8s pod launch entirely and route to this
-  // URL instead. Use for local dev: set LOCAL_SANDBOX_URL=http://localhost:4096
-  // and run the harness directly on the host.
-  LOCAL_SANDBOX_URL: z.string().url().optional(),
-
   // Warm pool — pre-provisioned sandbox pods waiting to be claimed by a
   // session create. Default of 2 keeps two pods ready for the most
   // recently active agent so users get sub-2s session creates out of the

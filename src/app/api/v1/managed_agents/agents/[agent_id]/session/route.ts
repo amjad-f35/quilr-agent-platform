@@ -29,7 +29,6 @@
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { env } from "@/server/env";
 import {
   runTask,
   waitHttpReady,
@@ -193,11 +192,6 @@ async function coldBringUp(
   session_id: string,
   body: BringUpBody,
 ): Promise<BringUpResult> {
-  // Local dev bypass: skip K8s pod launch and route directly to a running harness.
-  if (env.LOCAL_SANDBOX_URL) {
-    await waitHttpReady(env.LOCAL_SANDBOX_URL);
-    return finishBringUp(agent, session_id, body, env.LOCAL_SANDBOX_URL);
-  }
   await setPhase(session_id, "creating_sandbox");
   const { task_arn } = await runTask({
     agent,
