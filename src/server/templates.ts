@@ -31,6 +31,8 @@ export interface AgentTemplate {
   skill_name: string;
   skill: string;
   tools: string[];
+  /** Contents of requirements.txt, if present. Injected as AGENT_REQUIREMENTS env var. */
+  requirements: string | null;
 }
 
 interface TemplateManifest {
@@ -70,7 +72,13 @@ function loadTemplates(): AgentTemplate[] {
       // the frontmatter is for the Skills spec UI, not for the agent's prompt.
       const rawSkill = readFileSync(join(base, "skill.md"), "utf8").trim();
       const skill = rawSkill.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-      out.push({ ...manifest, prompt, skill });
+      let requirements: string | null = null;
+      try {
+        requirements = readFileSync(join(base, "requirements.txt"), "utf8").trim();
+      } catch {
+        // optional — no requirements.txt is fine
+      }
+      out.push({ ...manifest, prompt, skill, requirements });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[templates] skipping ${dir}: ${msg}`);

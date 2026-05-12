@@ -73,6 +73,7 @@ export const RESERVED_ENV_KEYS: ReadonlySet<string> = new Set([
   "AGENT_PROMPT",
   "PORT",
   "GIT_TOKEN",
+  "AGENT_REQUIREMENTS",
 ]);
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -92,6 +93,8 @@ export const CreateAgentBody = z.object({
   // definition family — opencode (default) or claude-agent-sdk. Kept open
   // as `string` so adding a third harness is a one-line env change.
   harness_id: z.string().optional(),
+  /** pip requirements.txt content — injected as AGENT_REQUIREMENTS and installed at harness boot. */
+  requirements: z.string().optional(),
   repo_url: z.string().url().optional(),
   branch: z.string().optional(),
   pfp_url: z.string().optional(),

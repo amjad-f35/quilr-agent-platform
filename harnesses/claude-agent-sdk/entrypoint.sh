@@ -68,11 +68,15 @@ if [ -n "${REPO_URL:-}" ]; then
   fi
 fi
 
-# claude-agent-sdk bakes its deps into the image at build time, so there's
-# no runtime `npm install`. Still report installing_deps for parity with
-# how the harness will evolve and to give the UI a distinct beat between
-# clone-finished and the listener actually accepting connections.
+# Install per-agent Python packages if AGENT_REQUIREMENTS is set.
+# Content is the requirements.txt body (newline-separated pip specs).
+# Use --target to install into a sandbox-owned directory instead of --system,
+# which would require root to write to /usr/lib/python3.x/dist-packages.
 report_phase installing_deps
+if [ -n "${AGENT_REQUIREMENTS:-}" ]; then
+  printf '%s\n' "$AGENT_REQUIREMENTS" | uv pip install --target /home/sandbox/.local/lib/python-agent -q -r /dev/stdin
+  export PYTHONPATH="/home/sandbox/.local/lib/python-agent${PYTHONPATH:+:$PYTHONPATH}"
+fi
 
 # Clone-only token: wipe so the LLM can't `printenv GIT_TOKEN` it back.
 unset GIT_TOKEN

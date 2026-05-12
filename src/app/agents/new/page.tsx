@@ -394,6 +394,7 @@ export default function NewAgentPage() {
         model: model.trim(),
         prompt: finalPrompt,
         harness_id: harnessId,
+        requirements: selectedTemplate?.requirements ?? undefined,
         branch: branchOverride.trim() || undefined,
         pfp_url: pfpUrl ?? undefined,
         mcp_servers: mcpServers.length > 0 ? mcpServers : undefined,

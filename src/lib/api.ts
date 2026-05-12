@@ -397,6 +397,7 @@ export interface CreateAgentRequest {
   // Picks which harness the Fargate container runs.
   // "opencode" (default) or "claude-agent-sdk".
   harness_id?: string;
+  requirements?: string;
   repo_url?: string;
   branch?: string;
   pfp_url?: string;
