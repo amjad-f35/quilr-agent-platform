@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import {
   AgentRow,
   ApiError,
-  listAgents,
+  listAgentsPaginated,
 } from "@/lib/api";
 
 function formatRelative(iso?: string | null): string {
@@ -72,7 +72,7 @@ export default function AgentsListPage() {
     setLoading(true);
     setError(null);
     try {
-      setAgents(await listAgents());
+      const r = await listAgentsPaginated({ limit: 200 }); setAgents(r.data);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
