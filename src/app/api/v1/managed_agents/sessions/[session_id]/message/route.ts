@@ -125,6 +125,7 @@ async function dispatchHarnessSend(opts: {
     // long-poll loop observes it instead of hanging forever.
     try {
       await appendSessionEvent(opts.session_id, {
+        event_id: crypto.randomUUID(),
         type: "error",
         message: "harness request failed",
       });
