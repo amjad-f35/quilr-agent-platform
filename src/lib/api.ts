@@ -1075,7 +1075,7 @@ export interface CreateSkillRequest {
 
 export interface UpdateSkillRequest {
   name?: string;
-  description?: string;
+  description?: string | null;
   content?: string;
 }
 

@@ -14,7 +14,8 @@ import {
   ApiError,
   SessionRow,
   SkillRow,
-  createSkill,
+  attachSkillToAgent,
+  detachSkillFromAgent,
   getAgent,
   listSkills,
   listSessions,
@@ -76,6 +77,7 @@ export default function AgentDetailPage({ params }: PageProps) {
   const [skillDragOver, setSkillDragOver] = useState(false);
   const [skillUploading, setSkillUploading] = useState(false);
   const [skillSaving, setSkillSaving] = useState(false);
+  const [skillSaveToLibrary, setSkillSaveToLibrary] = useState(true);
   const [existingSkills, setExistingSkills] = useState<SkillRow[]>([]);
   // Write form
   const [skillWriteName, setSkillWriteName] = useState("");
@@ -164,16 +166,15 @@ export default function AgentDetailPage({ params }: PageProps) {
   }
 
   async function handleSkillWrite() {
-    if (!skillWriteName.trim() || !skillWriteInstructions.trim()) return;
+    if (!skillWriteInstructions.trim()) return;
     setSkillSaving(true);
     setError(null);
     try {
-      await createSkill({
-        name: skillWriteName.trim(),
-        description: skillWriteDesc.trim() || undefined,
-        content: skillWriteInstructions.trim(),
-      });
-      await attachSkillContent(skillWriteInstructions.trim());
+      await attachSkillInline(
+        skillWriteInstructions.trim(),
+        skillWriteName.trim(),
+        skillWriteDesc.trim(),
+      );
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -181,14 +182,22 @@ export default function AgentDetailPage({ params }: PageProps) {
     }
   }
 
-  async function attachSkillContent(skillContent: string) {
+  async function attachSkillById(skillId: string) {
     if (!agent) return;
-    const basePrompt = agent.prompt?.split(/\n<!-- skill -->\n/)[0]?.trim() ?? "";
-    const newPrompt = skillContent.trim()
-      ? `${basePrompt}\n<!-- skill -->\n${skillContent.trim()}`
-      : basePrompt;
-    const updated = await updateAgent(agent.id, { prompt: newPrompt });
-    setAgent(updated);
+    const result = await attachSkillToAgent(agent.id, { skill_id: skillId });
+    setAgent(result.agent);
+    setShowSkillModal(false);
+  }
+
+  async function attachSkillInline(content: string, name: string, description: string) {
+    if (!agent) return;
+    const result = await attachSkillToAgent(agent.id, {
+      content,
+      name: name || undefined,
+      description: description || undefined,
+      save_to_library: skillSaveToLibrary,
+    });
+    setAgent(result.agent);
     setShowSkillModal(false);
   }
 
@@ -202,8 +211,7 @@ export default function AgentDetailPage({ params }: PageProps) {
     try {
       const text = await file.text();
       const { name, description, content } = parseSkillMd(text);
-      await createSkill({ name, description, content });
-      await attachSkillContent(content);
+      await attachSkillInline(content, name, description);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -215,7 +223,8 @@ export default function AgentDetailPage({ params }: PageProps) {
     if (!agent) return;
     setError(null);
     try {
-      await attachSkillContent("");
+      const result = await detachSkillFromAgent(agent.id);
+      setAgent(result.agent);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
     }
@@ -609,7 +618,7 @@ export default function AgentDetailPage({ params }: PageProps) {
                             <li key={sk.id}>
                               <button
                                 type="button"
-                                onClick={() => void attachSkillContent(sk.content)}
+                                onClick={() => void attachSkillById(sk.id)}
                                 className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors"
                               >
                                 <FileText className="size-3.5 shrink-0 text-muted-foreground" />
@@ -630,17 +639,32 @@ export default function AgentDetailPage({ params }: PageProps) {
 
                 {/* Footer — write tab only */}
                 {skillTab === "write" ? (
-                  <div className="flex justify-end gap-2 border-t px-6 py-4">
-                    <Button variant="outline" onClick={() => setShowSkillModal(false)} disabled={skillSaving}>
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={() => void handleSkillWrite()}
-                      disabled={skillSaving || !skillWriteName.trim() || !skillWriteInstructions.trim()}
-                    >
-                      {skillSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                      Create &amp; attach
-                    </Button>
+                  <div className="flex items-center justify-between border-t px-6 py-4">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm">
+                      <span
+                        className={`grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors ${
+                          skillSaveToLibrary ? "border-foreground bg-foreground text-background" : "border-border"
+                        }`}
+                        aria-hidden
+                      >
+                        {skillSaveToLibrary ? <svg className="size-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="2,6 5,9 10,3"/></svg> : null}
+                      </span>
+                      <input type="checkbox" className="sr-only" checked={skillSaveToLibrary}
+                        onChange={(e) => setSkillSaveToLibrary(e.target.checked)} disabled={skillSaving} />
+                      <span className="text-xs text-muted-foreground">Save to library</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={() => setShowSkillModal(false)} disabled={skillSaving}>
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={() => void handleSkillWrite()}
+                        disabled={skillSaving || !skillWriteInstructions.trim()}
+                      >
+                        {skillSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                        Attach
+                      </Button>
+                    </div>
                   </div>
                 ) : null}
               </div>

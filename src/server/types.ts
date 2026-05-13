@@ -142,7 +142,7 @@ export type CreateSkillBody = z.infer<typeof CreateSkillBody>;
 
 export const UpdateSkillBody = z.object({
   name: z.string().min(1).optional(),
-  description: z.string().optional(),
+  description: z.string().nullable().optional(),
   content: z.string().min(1).optional(),
 });
 export type UpdateSkillBody = z.infer<typeof UpdateSkillBody>;

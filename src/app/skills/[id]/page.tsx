@@ -58,7 +58,7 @@ export default function SkillDetailPage({ params }: PageProps) {
     try {
       const updated = await updateSkill(skill.id, {
         name: editName,
-        description: editDescription || undefined,
+        description: editDescription.trim() || null,
         content: editContent,
       });
       setSkill(updated);

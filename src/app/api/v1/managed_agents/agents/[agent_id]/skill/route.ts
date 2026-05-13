@@ -46,7 +46,7 @@ function embedSkill(basePrompt: string | null | undefined, skillContent: string)
 }
 
 export const POST = wrap<RouteContext>(async (req, ctx) => {
-  assertAuth(req);
+  const { user_id } = assertAuth(req);
   const { agent_id } = await ctx.params;
 
   const agent = await prisma.agent.findUnique({ where: { agent_id } });
@@ -59,7 +59,7 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
 
   if ("skill_id" in body) {
     const skill = await prisma.skill.findUnique({ where: { skill_id: body.skill_id } });
-    if (skill === null) httpError(404, `skill '${body.skill_id}' not found`);
+    if (skill === null || skill.created_by !== user_id) httpError(404, `skill '${body.skill_id}' not found`);
     skillContent = skill.content;
     savedSkill = toApiSkill(skill);
   } else {
@@ -70,6 +70,7 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
           name: body.name.trim(),
           description: body.description?.trim() ?? null,
           content: body.content,
+          created_by: user_id,
         },
       });
       savedSkill = toApiSkill(row);

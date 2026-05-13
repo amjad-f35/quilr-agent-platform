@@ -201,8 +201,10 @@ model Skill {
   name        String
   description String?
   content     String
+  created_by  String?
   created_at  DateTime @default(now())
 
+  @@index([created_by])
   @@map("skill")
 }
 

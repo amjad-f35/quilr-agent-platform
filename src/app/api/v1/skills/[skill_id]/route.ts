@@ -11,20 +11,20 @@ interface RouteContext {
 }
 
 export const GET = wrap<RouteContext>(async (req, ctx) => {
-  assertAuth(req);
+  const { user_id } = assertAuth(req);
   const { skill_id } = await ctx.params;
   const row = await prisma.skill.findUnique({ where: { skill_id } });
-  if (row === null) httpError(404, `skill '${skill_id}' not found`);
+  if (row === null || row.created_by !== user_id) httpError(404, `skill '${skill_id}' not found`);
   return Response.json(toApiSkill(row));
 });
 
 export const PATCH = wrap<RouteContext>(async (req, ctx) => {
-  assertAuth(req);
+  const { user_id } = assertAuth(req);
   const { skill_id } = await ctx.params;
   const body = UpdateSkillBody.parse(await req.json());
 
   const existing = await prisma.skill.findUnique({ where: { skill_id } });
-  if (existing === null) httpError(404, `skill '${skill_id}' not found`);
+  if (existing === null || existing.created_by !== user_id) httpError(404, `skill '${skill_id}' not found`);
 
   const updated = await prisma.skill.update({
     where: { skill_id },
@@ -38,10 +38,10 @@ export const PATCH = wrap<RouteContext>(async (req, ctx) => {
 });
 
 export const DELETE = wrap<RouteContext>(async (req, ctx) => {
-  assertAuth(req);
+  const { user_id } = assertAuth(req);
   const { skill_id } = await ctx.params;
   const existing = await prisma.skill.findUnique({ where: { skill_id } });
-  if (existing === null) httpError(404, `skill '${skill_id}' not found`);
+  if (existing === null || existing.created_by !== user_id) httpError(404, `skill '${skill_id}' not found`);
   await prisma.skill.delete({ where: { skill_id } });
   return new Response(null, { status: 204 });
 });
