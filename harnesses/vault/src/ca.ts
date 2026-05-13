@@ -1,12 +1,12 @@
 // Persistent cluster-level CA + per-host leaf cert issuance.
 //
 // The CA cert is baked into the harness image at build time
-// (harnesses/lap-vault/ca.crt -> /usr/local/share/ca-certificates) so every
+// (harnesses/vault/ca.crt -> /usr/local/share/ca-certificates) so every
 // binary in the sandbox trusts it on boot — including the bundled `claude`
 // native binary which ignores NODE_EXTRA_CA_CERTS.
 //
-// The matching CA private key lives in the K8s secret `lap-vault-ca`,
-// mounted at /etc/lap-vault-ca/tls.key (read-only) on this container only.
+// The matching CA private key lives in the K8s secret `vault-ca`,
+// mounted at /etc/vault-ca/tls.key (read-only) on this container only.
 // The harness container never sees the key.
 
 import { promises as fs } from "node:fs";
@@ -60,7 +60,7 @@ export async function bootstrapCa(sharedDir: string): Promise<CA> {
   // Load the CA from the secret-mounted directory. The cert is also baked
   // into the harness image, so the agent already trusts whatever leaves
   // we sign with this key.
-  const caDir = process.env.LAP_VAULT_CA_DIR ?? "/etc/lap-vault-ca";
+  const caDir = process.env.VAULT_CA_DIR ?? "/etc/vault-ca";
   const [certPem, keyPem] = await Promise.all([
     fs.readFile(path.join(caDir, "tls.crt"), "utf8"),
     fs.readFile(path.join(caDir, "tls.key"), "utf8"),
