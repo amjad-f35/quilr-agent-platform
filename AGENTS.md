@@ -4,17 +4,6 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
-# Read this first: SessionEvent architecture
-
-How harness output reaches the UI, Slack, and external consumers — single
-unified log, one translator, one read path:
-
-→ **[docs/session-event-flow.md](docs/session-event-flow.md)**
-
-If you're touching anything under `harnesses/`, `src/worker/`, the
-`/sessions/[sid]/events` route, or the `managed_agent_session_event`
-table, read that doc before making changes.
-
 # Debugging a stuck or slow session
 
 When investigating a session that's stuck in `creating` or that took unexpectedly long, **start with the diagnose endpoint** instead of running a dozen kubectl / curl / log queries by hand:
@@ -97,7 +86,7 @@ These edits live inside the `agent-sbx-control-plane` container's filesystem, so
 
 Two issues, both surface as `session create failed` during `creating_sandbox`.
 
-**a) Mount target unreachable by the container user.** The web container runs as `nextjs` (uid 1001), but the compose volume mounts the host kubeconfig at `/root/.kube/config`. Failure: `EACCES: permission denied, open '/root/.kube/config'`. Fix by mounting to a path readable by uid 1001 and overriding `KUBECONFIG` accordingly, e.g.:
+**a) Mount target unreachable by the container user.** The web/worker containers run as `nextjs` (uid 1001), but the compose volume mounts the host kubeconfig at `/root/.kube/config`. Failure: `EACCES: permission denied, open '/root/.kube/config'`. Fix by mounting to a path readable by uid 1001 and overriding `KUBECONFIG` accordingly, e.g.:
 
 ```yaml
 environment:
@@ -116,7 +105,7 @@ KUBECONFIG=~/.kube/config kubectl config view --raw --minify \
 chmod 644 .local/kube/config
 ```
 
-The k8s clients in `src/server/k8s.ts` are cached on first request — restart `web` (`docker compose restart web`) after rewriting the kubeconfig file or the stale config keeps loading.
+The k8s clients in `src/server/k8s.ts` are cached on first request — restart `web` and `worker` (`docker compose restart web worker`) after rewriting the kubeconfig file or the stale config keeps loading.
 
 ## 4. Postgres host-port collision
 

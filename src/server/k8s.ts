@@ -284,7 +284,6 @@ interface SandboxSpec {
     };
     spec: {
       restartPolicy: string;
-      priorityClassName?: string;
       containers: Array<{
         name: string;
         image: string;
@@ -329,10 +328,6 @@ export async function runTask(
         },
         spec: {
           restartPolicy: "Never",
-          // Active session pods run at higher priority than warm pool pods so
-          // the scheduler preempts warm pods to make room under memory pressure.
-          // Warm pool pods are stamped with sandbox-warm in warmPool.ts.
-          priorityClassName: opts.session_id ? "sandbox-active" : "sandbox-warm",
           containers: [
             {
               name: CONTAINER_NAME,
@@ -806,23 +801,3 @@ export async function readPodLogs(
 // the k8s path — labels are namespaced separately above — but importing them
 // from here keeps the module surface uniform with fargate.ts.
 export { TAG_AGENT_ID, TAG_SESSION_ID, TAG_WARM_TASK_ID };
-
-// ---------------------------------------------------------------------------
-// probeK8s — lightweight connectivity check for the health endpoint.
-// Makes the same list call reconcileOrphans uses first. Never throws.
-// ---------------------------------------------------------------------------
-
-export async function probeK8s(): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    await customApi().listNamespacedCustomObject({
-      group: SANDBOX_GROUP,
-      version: SANDBOX_VERSION,
-      namespace: env.K8S_NAMESPACE,
-      plural: SANDBOX_PLURAL,
-      limit: 1,
-    });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
