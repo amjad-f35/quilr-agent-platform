@@ -6,6 +6,28 @@
 # clone-then-listen flow, same port.
 set -euo pipefail
 
+# lap-vault sidecar handoff. When enabled, the sidecar writes a stub-env
+# file and its CA cert into the shared volume at /lap-shared. We wait for
+# both, source the stubs into our env, and point git/curl/python TLS at
+# the sidecar CA so MITM'd upstream requests are trusted. Real secrets
+# never enter this container's env or fs.
+if [ "${LAP_VAULT_ENABLED:-}" = "true" ]; then
+  for _ in $(seq 1 30); do
+    if [ -s /lap-shared/env ] && [ -s /lap-shared/ca.crt ]; then break; fi
+    sleep 0.5
+  done
+  if [ ! -s /lap-shared/env ] || [ ! -s /lap-shared/ca.crt ]; then
+    echo "[entrypoint] lap-vault not ready after 15s — proceeding without stubs" >&2
+  else
+    set -a
+    . /lap-shared/env
+    set +a
+    export GIT_SSL_CAINFO=/lap-shared/ca.crt
+    export CURL_CA_BUNDLE=/lap-shared/ca.crt
+    echo "[entrypoint] lap-vault stubs sourced ($(wc -l </lap-shared/env) keys)"
+  fi
+fi
+
 : "${LITELLM_API_KEY:?LITELLM_API_KEY required}"
 : "${LITELLM_API_BASE:?LITELLM_API_BASE required}"
 : "${LITELLM_DEFAULT_MODEL:?LITELLM_DEFAULT_MODEL required}"
