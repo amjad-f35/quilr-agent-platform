@@ -79,7 +79,10 @@ carries snapshot events only.
 
 [`src/worker/index.ts`](../src/worker/index.ts) scans Postgres every 10s
 for `status='ready'` sessions and attaches one SSE subscriber per pod.
-For each frame:
+The loop runs inside the Next.js process (booted by
+[`src/instrumentation.ts`](../src/instrumentation.ts)); for local-only
+out-of-process runs, `npx tsx src/worker/index.ts` still works. For each
+frame:
 
 1. `JSON.parse` (no translation — the harness already emitted the
    canonical shape)
