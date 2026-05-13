@@ -268,13 +268,12 @@ async function buildContainerEnv(
     ...(env_vars ?? {}),
     ...base,
     // Route all outbound HTTPS through the in-pod lap-vault sidecar so it can
-    // swap stubs for real secrets at egress.
+    // swap stubs for real secrets at egress. The sidecar's CA is baked into
+    // the harness image's system trust store at build time, so we don't need
+    // any per-process CA-file overrides — git/curl/python/node all trust
+    // the sidecar's leaf certs out of the box, alongside the public web.
     HTTPS_PROXY: "http://127.0.0.1:14322",
     HTTP_PROXY: "http://127.0.0.1:14322",
-    // Trust the sidecar's CA so the agent accepts its MITM cert.
-    NODE_EXTRA_CA_CERTS: "/lap-shared/ca.crt",
-    SSL_CERT_FILE: "/lap-shared/ca.crt",
-    REQUESTS_CA_BUNDLE: "/lap-shared/ca.crt",
     // Marker the harness entrypoint checks to know it should source the
     // sidecar-written /lap-shared/env file before exec.
     LAP_VAULT_ENABLED: "true",
@@ -328,6 +327,7 @@ interface SandboxContainer {
 interface SandboxVolume {
   name: string;
   emptyDir?: { medium?: string };
+  secret?: { secretName: string };
 }
 
 interface SandboxSpec {
@@ -409,6 +409,10 @@ export async function runTask(
               env: buildVaultEnv(opts),
               volumeMounts: [
                 { name: "lap-shared", mountPath: "/lap-shared" },
+                // Cluster-level CA. Public cert is baked into the harness
+                // image; the matching private key is in this secret and
+                // never enters the harness container.
+                { name: "lap-vault-ca", mountPath: "/etc/lap-vault-ca", readOnly: true },
               ],
               resources: {
                 requests: { cpu: "20m", memory: "80Mi" },
@@ -418,6 +422,7 @@ export async function runTask(
           ],
           volumes: [
             { name: "lap-shared", emptyDir: { medium: "Memory" } },
+            { name: "lap-vault-ca", secret: { secretName: "lap-vault-ca" } },
           ],
         },
       },
