@@ -30,7 +30,7 @@ function mintStub(realKey: string): string {
   return `stub_${ns}_${rand}`;
 }
 
-async function loadSecrets(): Promise<Map<string, string>> {
+function loadSecrets(): { kv: Map<string, string>; stubLines: string[]; entries: SecretEntry[] } {
   const kv = new Map<string, string>();
   const stubLines: string[] = [];
   const entries: SecretEntry[] = [];
@@ -44,13 +44,10 @@ async function loadSecrets(): Promise<Map<string, string>> {
     entries.push({ realKey, stub, real: envVal });
     stubLines.push(`${realKey}=${stub}`);
   }
-
-  await fs.mkdir(SHARED_DIR, { recursive: true });
-  await fs.writeFile(`${SHARED_DIR}/env`, stubLines.join("\n") + "\n", { mode: 0o644 });
   console.log(
     `[lap-vault] loaded ${entries.length} secret(s): ${entries.map((e) => e.realKey).join(", ")}`,
   );
-  return kv;
+  return { kv, stubLines, entries };
 }
 
 async function startConnectProxy(ca: CA, kv: Map<string, string>) {
@@ -170,17 +167,32 @@ async function startConnectProxy(ca: CA, kv: Map<string, string>) {
     inner.emit("connection", agentTls);
   });
 
-  server.listen(PROXY_PORT, "127.0.0.1", () => {
-    console.log(`[lap-vault] listening on 127.0.0.1:${PROXY_PORT}`);
+  await new Promise<void>((resolve) => {
+    server.listen(PROXY_PORT, "127.0.0.1", () => {
+      console.log(`[lap-vault] listening on 127.0.0.1:${PROXY_PORT}`);
+      resolve();
+    });
   });
 }
 
 async function main() {
   console.log("[lap-vault] starting");
-  const kv = await loadSecrets();
+  const { kv, stubLines } = loadSecrets();
   const ca = await bootstrapCa(SHARED_DIR);
   console.log(`[lap-vault] CA written to ${SHARED_DIR}/ca.crt`);
   await startConnectProxy(ca, kv);
+
+  // Write /lap-shared/env LAST, after the proxy is listening. The harness
+  // entrypoint blocks until this file exists, so this ordering guarantees
+  // that by the time the harness starts making proxied requests, lap-vault
+  // is already accepting connections on 127.0.0.1:14322.
+  await fs.mkdir(SHARED_DIR, { recursive: true });
+  await fs.writeFile(
+    `${SHARED_DIR}/env`,
+    stubLines.join("\n") + "\n",
+    { mode: 0o644 },
+  );
+  console.log(`[lap-vault] wrote ${SHARED_DIR}/env`);
 }
 
 main().catch((e) => {
