@@ -201,6 +201,17 @@ async function runTurn(
     // model has to make its best judgment and proceed. Revisit when both
     // surfaces render answerable question cards.
     disallowedTools: ["AskUserQuestion"],
+    // Enable extended thinking. Without this flag, Anthropic's models still
+    // emit thinking content blocks but they come through with empty text — a
+    // schema artifact rather than real thought — so the UI's collapsible
+    // thinking pill (view.tsx ThinkingBlock) never has content to show.
+    // Turning this on gives the model a budget for visible reasoning that
+    // the UI renders behind the "thinking" pill. 8000 tokens is the Claude
+    // Code default; tune via CLAUDE_THINKING_BUDGET env var per-deploy.
+    thinking: {
+      type: "enabled",
+      budgetTokens: Number(process.env.CLAUDE_THINKING_BUDGET ?? 8000),
+    },
     ...(CLAUDE_BIN ? { pathToClaudeCodeExecutable: CLAUDE_BIN } : {}),
     // Memory tools: only register when the in-process server was built (i.e.
     // LAP env vars are set). Names are namespaced `mcp__<server>__<tool>`.
