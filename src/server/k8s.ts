@@ -316,7 +316,13 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
     !Array.isArray(agent.env_vars)
       ? (agent.env_vars as Record<string, string>)
       : {};
-  return Object.entries(raw).map(([k, v]) => ({ name: `REAL_${k}`, value: decrypt(v) }));
+  const out: Array<{ name: string; value: string }> = Object.entries(raw).map(
+    ([k, v]) => ({ name: `REAL_${k}`, value: decrypt(v) }),
+  );
+  // MASTER_KEY is the shared secret both sides hash to derive the
+  // /interceptions auth token. Without it the platform's queries 401.
+  out.push({ name: "MASTER_KEY", value: env.MASTER_KEY });
+  return out;
 }
 
 // ---------------------------------------------------------------------------
