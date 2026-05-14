@@ -44,6 +44,12 @@ const ONE_HOUR_MS = 60 * 60 * 1_000;
 
 interface InterceptionsPanelProps {
   sessionId: string;
+  /**
+   * Initial expanded state. Defaults to `false` (collapsed) for in-thread
+   * placement. The inspector tab placement passes `true` so the table is
+   * visible the moment the user opens the Vault tab.
+   */
+  initialExpanded?: boolean;
 }
 
 function formatTimestamp(iso: string): string {
@@ -69,8 +75,11 @@ function countInLastHour(records: VaultInterception[]): number {
   return n;
 }
 
-export function InterceptionsPanel({ sessionId }: InterceptionsPanelProps) {
-  const [expanded, setExpanded] = useState<boolean>(false);
+export function InterceptionsPanel({
+  sessionId,
+  initialExpanded = false,
+}: InterceptionsPanelProps) {
+  const [expanded, setExpanded] = useState<boolean>(initialExpanded);
   const [records, setRecords] = useState<VaultInterception[]>([]);
   const [hasLoaded, setHasLoaded] = useState<boolean>(false);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -155,7 +164,7 @@ export function InterceptionsPanel({ sessionId }: InterceptionsPanelProps) {
           aria-hidden
         />
         <span className="mono text-[11px] text-gray-600">
-          vault interceptions
+          Vault Interceptions
         </span>
         <span className="ml-auto flex items-center gap-1.5">
           <span className="mono text-[11px] text-gray-400">
@@ -168,13 +177,13 @@ export function InterceptionsPanel({ sessionId }: InterceptionsPanelProps) {
           <Card className="rounded-none border-0 shadow-none">
             <CardHeader className="pb-2">
               <CardTitle className="text-[13px] font-medium">
-                Credential swaps
+                Vault Interceptions
               </CardTitle>
               <CardDescription className="text-[12px]">
-                {lastHour} interception{lastHour === 1 ? "" : "s"} in the
-                last hour. Showing the most recent {records.length} from the
-                vault sidecar (ring buffer, max 100). Real values are never
-                surfaced — only the last 2 characters as a fingerprint.
+                {lastHour} Vault Interception{lastHour === 1 ? "" : "s"} in
+                the last hour. Showing the most recent {records.length} from
+                the vault sidecar (ring buffer, max 100). Real values are
+                never surfaced — only the last 2 characters as a fingerprint.
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-0">
@@ -190,7 +199,7 @@ export function InterceptionsPanel({ sessionId }: InterceptionsPanelProps) {
               ) : sorted.length === 0 ? (
                 <div className="rounded border border-dashed border-gray-200 px-3 py-4 text-center">
                   <div className="text-[13px] text-gray-700">
-                    No interceptions yet.
+                    No Vault Interceptions yet.
                   </div>
                   <div className="mt-1 text-[12px] text-gray-500">
                     Try sending a message that triggers a tool call (e.g.{" "}
