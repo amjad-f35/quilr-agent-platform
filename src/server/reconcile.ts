@@ -171,18 +171,22 @@ async function sweepStaleWarmTasks(now: number): Promise<number> {
     if (!row.task_arn) continue;
 
     // Grace window: freshly provisioned pods may not yet appear in the API.
+    // Treat unknown age (null ready_at) as within the grace window — same
+    // conservative approach as sweepWarmOrphans / taskAgeMs.
     const ageMs = row.ready_at ? now - row.ready_at.getTime() : null;
-    if (ageMs !== null && ageMs < RECONCILE_NEW_TASK_GRACE_MS) continue;
+    if (ageMs === null || ageMs < RECONCILE_NEW_TASK_GRACE_MS) continue;
 
     let phaseInfo: Awaited<ReturnType<typeof readPodPhase>> | null = null;
     try {
       phaseInfo = await readPodPhase(row.task_arn);
     } catch {
-      // NotFound or API error — treat pod as gone.
+      // Non-404 API error (network failure, auth, etc.) — treat pod as gone.
+      // readPodPhase handles NotFound internally and returns {phase:undefined}.
     }
 
     const podGone =
       !phaseInfo ||
+      phaseInfo.phase === undefined || // NotFound — readPodPhase returns {phase:undefined} on 404
       phaseInfo.phase === "Failed" ||
       phaseInfo.phase === "Succeeded";
 
