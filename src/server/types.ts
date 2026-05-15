@@ -131,6 +131,8 @@ export const UpdateAgentBody = z.object({
   mcp_servers: z.array(z.string()).optional(),
   harness_image: z.string().optional(),
   prompt: z.string().optional(),
+  model: z.string().min(1).optional(),
+  branch: z.string().optional(),
   /**
    * Replace the agent's env_vars map. Same constraints as the CreateAgentBody
    * version: max keys, max byte size, reserved keys blocked. The PATCH route
@@ -617,11 +619,15 @@ export function encryptEnvVars(
   );
 }
 
-/** Decrypt each value in a stored env vars map. */
+/** Decrypt each value in a stored env vars map. Returns empty map on decryption failure. */
 function decryptEnvVars(stored: Record<string, unknown>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(stored).map(([k, v]) => [k, decrypt(String(v))]),
-  );
+  try {
+    return Object.fromEntries(
+      Object.entries(stored).map(([k, v]) => [k, decrypt(String(v))]),
+    );
+  } catch {
+    return {};
+  }
 }
 
 export function toApiAgent(row: AgentRow): ApiAgent {

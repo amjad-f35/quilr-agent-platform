@@ -434,6 +434,8 @@ export interface UpdateAgentRequest {
    * that the user can't see. Re-encrypted at rest.
    */
   env_vars?: Record<string, string>;
+  model?: string;
+  branch?: string;
 }
 
 export function listAgents(): Promise<AgentRow[]> {
@@ -489,6 +491,10 @@ export function updateAgent(
     `/v1/managed_agents/agents/${encodeURIComponent(id)}`,
     req,
   );
+}
+
+export function deleteAgent(id: string): Promise<void> {
+  return api<void>("DELETE", `/v1/managed_agents/agents/${encodeURIComponent(id)}`);
 }
 
 // ---------- Memory ----------
