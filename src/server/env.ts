@@ -24,6 +24,12 @@ const EnvSchema = z.object({
   K8S_HARNESS_IMAGE: z.string().min(1).default("opencode-sandbox:dev"),
   K8S_HARNESS_IMAGE_OPENCODE: z.string().optional(),
   K8S_HARNESS_IMAGE_CLAUDE_SDK: z.string().optional(),
+  // TUI harnesses — see harnesses/claude-code/ and harnesses/codex/. The
+  // session view attaches xterm.js to /tty on the pod instead of using the
+  // JSON message API. Falls back to K8S_HARNESS_IMAGE if unset, like the
+  // other harness vars.
+  K8S_HARNESS_IMAGE_CLAUDE_CODE: z.string().optional(),
+  K8S_HARNESS_IMAGE_CODEX: z.string().optional(),
   K8S_VAULT_IMAGE: z.string().min(1).default("vault:dev"),
   K8S_API_SERVER: z.string().optional().default(""),
   // Explicit opt-in to skip TLS verification when K8S_API_SERVER is

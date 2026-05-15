@@ -295,6 +295,11 @@ export interface ApiSession {
   id: string;
   agent_id: string;
   sandbox_url: string | null;
+  // Bearer token for the harness's `/tty` WebSocket. Populated only for TUI
+  // harnesses (claude-code, codex) where the harness pod requires
+  // authentication on the WS upgrade. The browser session view and the
+  // `lap` CLI both append this as `?token=…` when connecting.
+  tty_token: string | null;
   status: SessionStatus | string;
   task_arn: string | null;
   response: HarnessMessageResponse | null;
@@ -426,6 +431,8 @@ export interface ServerEnv {
   K8S_HARNESS_IMAGE: string;
   K8S_HARNESS_IMAGE_OPENCODE?: string;
   K8S_HARNESS_IMAGE_CLAUDE_SDK?: string;
+  K8S_HARNESS_IMAGE_CLAUDE_CODE?: string;
+  K8S_HARNESS_IMAGE_CODEX?: string;
   // Image for the vault sidecar that runs alongside the harness in each
   // Sandbox pod. Defaults to "vault:dev" (the kind-loaded local image);
   // production deploys point this at a registry-published image.
@@ -668,10 +675,21 @@ export function toApiSession(
   row: SessionRow,
   response: HarnessMessageResponse | null = null,
 ): ApiSession {
+  // tty_token comes from the shared HARNESS_AUTH_TOKEN env var the platform
+  // also propagates into sandbox pods (via CONTAINER_ENV_HARNESS_AUTH_TOKEN
+  // passthrough). Clients connecting to the harness's /tty WS need to send
+  // the same value as ?token=…. Returned unconditionally because the master
+  // key required to read this response already grants admin access; per-
+  // session token minting is a follow-up.
+  const ttyToken =
+    process.env.HARNESS_AUTH_TOKEN?.trim() ||
+    process.env.CONTAINER_ENV_HARNESS_AUTH_TOKEN?.trim() ||
+    null;
   return {
     id: row.session_id,
     agent_id: row.agent_id,
     sandbox_url: row.sandbox_url ?? null,
+    tty_token: ttyToken,
     status: row.status,
     task_arn: row.task_arn ?? null,
     response:
@@ -697,9 +715,19 @@ export const TAG_AGENT_ID = "litellm_agent_id";
 export const TAG_WARM_TASK_ID = "litellm_warm_task_id";
 export const HARNESS_OPENCODE = "opencode";
 export const HARNESS_CLAUDE_SDK = "claude-agent-sdk";
+// TUI harnesses — pod exposes /tty (WebSocket) instead of the JSON message API.
+// The session view attaches xterm.js directly.
+export const HARNESS_CLAUDE_CODE = "claude-code";
+export const HARNESS_CODEX = "codex";
+export const TUI_HARNESSES: ReadonlySet<string> = new Set([
+  HARNESS_CLAUDE_CODE,
+  HARNESS_CODEX,
+]);
 export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
   HARNESS_OPENCODE,
   HARNESS_CLAUDE_SDK,
+  HARNESS_CLAUDE_CODE,
+  HARNESS_CODEX,
 ]);
 
 // Resolves the container image for a harness at runtime from env vars.
@@ -708,11 +736,19 @@ export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
 // env is imported lazily to avoid circular deps — pass it in from the call site.
 export function resolveHarnessImage(
   harness_id: string,
-  harnessEnv: { K8S_HARNESS_IMAGE: string; K8S_HARNESS_IMAGE_OPENCODE?: string; K8S_HARNESS_IMAGE_CLAUDE_SDK?: string },
+  harnessEnv: {
+    K8S_HARNESS_IMAGE: string;
+    K8S_HARNESS_IMAGE_OPENCODE?: string;
+    K8S_HARNESS_IMAGE_CLAUDE_SDK?: string;
+    K8S_HARNESS_IMAGE_CLAUDE_CODE?: string;
+    K8S_HARNESS_IMAGE_CODEX?: string;
+  },
 ): string {
   const map: Record<string, string | undefined> = {
     [HARNESS_CLAUDE_SDK]: harnessEnv.K8S_HARNESS_IMAGE_CLAUDE_SDK,
     [HARNESS_OPENCODE]: harnessEnv.K8S_HARNESS_IMAGE_OPENCODE,
+    [HARNESS_CLAUDE_CODE]: harnessEnv.K8S_HARNESS_IMAGE_CLAUDE_CODE,
+    [HARNESS_CODEX]: harnessEnv.K8S_HARNESS_IMAGE_CODEX,
   };
   return map[harness_id] ?? harnessEnv.K8S_HARNESS_IMAGE;
 }

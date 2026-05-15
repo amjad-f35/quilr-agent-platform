@@ -173,6 +173,9 @@ export interface SessionRow {
   id: string;
   agent_id: string;
   sandbox_url?: string | null;
+  // Bearer token for the harness's `/tty` WebSocket on TUI harnesses.
+  // Populated by the backend from process.env.HARNESS_AUTH_TOKEN.
+  tty_token?: string | null;
   status: SessionStatus;
   task_arn?: string | null;
   response?: HarnessMessageResponse | null;

@@ -50,6 +50,10 @@ type HarnessOption = {
   id: string;
   label: string;
   description: string;
+  // "chat" renders the existing assistant-message panel in the session view.
+  // "tui"  attaches the browser to the harness's PTY via xterm.js + WebSocket
+  //        (the CLI agent renders its TUI directly in the user's browser).
+  kind: "chat" | "tui";
 };
 const HARNESS_OPTIONS: HarnessOption[] = [
   {
@@ -57,12 +61,28 @@ const HARNESS_OPTIONS: HarnessOption[] = [
     label: "opencode",
     description:
       "Multi-provider via LiteLLM. Default — used by every existing agent.",
+    kind: "chat",
   },
   {
     id: "claude-agent-sdk",
     label: "claude-agent-sdk",
     description:
       "Anthropic's first-party agent loop. Fewer harness bugs; SDK persists session state for free.",
+    kind: "chat",
+  },
+  {
+    id: "claude-code",
+    label: "claude-code",
+    description:
+      "Claude Code CLI, running in the sandbox. Opens as a live TUI in your browser via xterm.js.",
+    kind: "tui",
+  },
+  {
+    id: "codex",
+    label: "codex",
+    description:
+      "OpenAI Codex CLI, running in the sandbox. Opens as a live TUI in your browser via xterm.js.",
+    kind: "tui",
   },
 ];
 const DEFAULT_HARNESS_ID = HARNESS_OPTIONS[0].id;
@@ -697,8 +717,20 @@ export default function NewAgentPage() {
                             {selected ? <Check className="size-3" /> : null}
                           </span>
                           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="font-mono text-[13px] text-foreground">
-                              {opt.label}
+                            <span className="flex items-center gap-2">
+                              <span className="font-mono text-[13px] text-foreground">
+                                {opt.label}
+                              </span>
+                              <span
+                                className={cn(
+                                  "rounded px-1.5 py-px font-mono text-[9.5px] font-semibold tracking-wide",
+                                  opt.kind === "tui"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : "bg-indigo-50 text-indigo-700",
+                                )}
+                              >
+                                {opt.kind === "tui" ? "TUI" : "CHAT"}
+                              </span>
                             </span>
                             <span className="text-[11px] text-muted-foreground">
                               {opt.description}

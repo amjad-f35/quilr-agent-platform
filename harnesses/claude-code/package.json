@@ -1,0 +1,14 @@
+{
+  "name": "claude-tty-poc",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal POC: Claude Code (or bash) in a sandbox, bridged to a browser terminal via xterm.js + WebSocket.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.20.1"
+  }
+}
