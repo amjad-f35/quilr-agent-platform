@@ -182,6 +182,23 @@ function isTuiAgent(a) {
   return CLIENT_TUI_HARNESSES.has(a.harness_id);
 }
 
+// Compact "<owner>/<name>" display string from a full git remote URL.
+// Falls back to the raw value for non-URL strings (e.g. SSH remotes).
+function shortRepo(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const p = u.pathname.replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
+    return p || url;
+  } catch {
+    return url;
+  }
+}
+
+function envVarCount(agent) {
+  return Object.keys(agent?.env_vars ?? {}).length;
+}
+
 async function openAgent(args) {
   // Accept `lap <name>`, `lap --agent <name>`, or `lap` (prompts).
   // The agent's harness_id determines what CLI runs inside the sandbox
@@ -206,13 +223,19 @@ async function openAgent(args) {
     cfg = await login();
   }
 
-  // Resolve agent: accept either a UUID or a name.
-  let agentId;
-  if (/^[0-9a-f-]{36}$/i.test(wanted)) {
-    agentId = wanted;
-  } else {
-    process.stdout.write(`  \x1b[2m→ resolving agent '${wanted}'…\x1b[0m`);
-    try {
+  // Resolve agent: accept either a UUID or a name. Keep the full ApiAgent
+  // object around so downstream steps (hydration display) can read
+  // repo_url / env_vars without a second fetch.
+  let agent;
+  try {
+    if (/^[0-9a-f-]{36}$/i.test(wanted)) {
+      const r = await fetch(`${cfg.base}/api/v1/managed_agents/agents/${wanted}`, {
+        headers: { "authorization": `Bearer ${cfg.key}` },
+      });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      agent = await r.json();
+    } else {
+      process.stdout.write(`  \x1b[2m→ resolving agent '${wanted}'…\x1b[0m`);
       const r = await fetch(`${cfg.base}/api/v1/managed_agents/agents`, {
         headers: { "authorization": `Bearer ${cfg.key}` },
       });
@@ -224,13 +247,14 @@ async function openAgent(args) {
         console.error(`  \x1b[2mavailable: ${data.slice(0, 8).map(a => a.name).join(", ")}${data.length > 8 ? ` (+${data.length - 8} more)` : ""}\x1b[0m`);
         process.exit(1);
       }
-      agentId = hit.id;
-      console.log(`\r  \x1b[32m✓\x1b[0m agent \x1b[36m${hit.name}\x1b[0m \x1b[2m(${agentId.slice(0,8)}, harness=${hit.harness_id})\x1b[0m`);
-    } catch (e) {
-      console.error(`\n  \x1b[31m✗ agent lookup failed: ${e.message}\x1b[0m`);
-      process.exit(1);
+      agent = hit;
+      process.stdout.write(`\r  \x1b[32m✓\x1b[0m agent \x1b[36m${agent.name}\x1b[0m \x1b[2m(${agent.id.slice(0,8)}, harness=${agent.harness_id})\x1b[0m\n`);
     }
+  } catch (e) {
+    console.error(`\n  \x1b[31m✗ agent lookup failed: ${e.message}\x1b[0m`);
+    process.exit(1);
   }
+  const agentId = agent.id;
 
   process.stdout.write(`  \x1b[2m→ POST .../agents/${agentId.slice(0,8)}…/session\x1b[0m\n`);
   let sid;
@@ -300,6 +324,16 @@ async function openAgent(args) {
     process.exit(1);
   }
   process.stdout.write(" \x1b[32mready\x1b[0m\n");
+
+  // Show which env vars the harness will receive from the vault. Names
+  // only — the real values stay sidecar-side and are MITM'd at egress.
+  const envKeys = Object.keys(agent.env_vars ?? {}).sort();
+  if (envKeys.length > 0) {
+    console.log(`  ${ansi.dim(`↪ loading ${envKeys.length} env var${envKeys.length === 1 ? "" : "s"} from vault`)}`);
+    for (const k of envKeys) {
+      console.log(`    ${ansi.dim(k)}`);
+    }
+  }
 
   let wsUrl;
   if (session.sandbox_url && !session.sandbox_url.includes(".svc.cluster.local")) {
@@ -421,7 +455,10 @@ async function agentsCmd() {
     const name = (a.name ?? "<unnamed>").padEnd(28);
     const harness = (a.harness_id ?? "?").padEnd(20);
     const tag = isTuiAgent(a) ? ansi.cyan("[tui]") : ansi.dim("     ");
-    console.log(`  ${name} \x1b[2m${harness}\x1b[0m ${tag} \x1b[2m${a.id.slice(0,8)}\x1b[0m`);
+    const repo = (shortRepo(a.repo_url) ?? "—").padEnd(28);
+    const n = envVarCount(a);
+    const env = `${n} env${n === 1 ? " " : "s"}`;
+    console.log(`  ${name} \x1b[2m${harness}\x1b[0m ${tag} \x1b[2m${a.id.slice(0,8)}  ${repo}  ${env}\x1b[0m`);
   }
 }
 
@@ -460,7 +497,10 @@ async function wizard() {
   process.stdout.write(`  ${ansi.bold("Pick an agent")}  ${ansi.dim("↑/↓ to move, Enter to open, q to cancel")}\n\n`);
   const picked = await pickFromList(tui, (a) => {
     const name = (a.name ?? "<unnamed>").padEnd(28);
-    return `${name} ${ansi.dim(`${a.harness_id ?? "?"}  ${a.id.slice(0, 8)}`)}`;
+    const repo = shortRepo(a.repo_url) ?? "—";
+    const n = envVarCount(a);
+    const meta = `${a.harness_id ?? "?"}  ${a.id.slice(0, 8)}  ${repo}  ${n} env${n === 1 ? "" : "s"}`;
+    return `${name} ${ansi.dim(meta)}`;
   });
   if (!picked) { console.log(`  ${ansi.dim("cancelled.")}`); process.exit(0); }
   process.stdout.write("\n");
