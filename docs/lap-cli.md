@@ -10,7 +10,7 @@ vault swaps for the real values at egress.
   ✓ agent claude-code-cli1 (ac70ab02, harness=claude-code)
   ✓ session 8c12262c
   waiting for sandbox. ready
-  → attaching local TTY to ws://54.174.239.129:32011/tty?token=…
+  → attaching local TTY to ws://54.174.239.129:32011/tty
 
 ╭───────────────────────────────────────────────────────╮
 │   ✻ Welcome to Claude Code                            │
@@ -65,7 +65,10 @@ What happens:
 2. `POST /agents/:id/session` creates the session.
 3. Polls `GET /sessions/:id` until `status=ready`.
 4. Reads `sandbox_url` + `tty_token` from the response.
-5. Opens `ws://<sandbox_url>/tty?token=<tty_token>`.
+5. Opens `ws://<sandbox_url>/tty` with the `tty_token` sent as an
+   `Authorization: Bearer <token>` header on the WS upgrade handshake.
+   The header form keeps the token out of ingress/proxy/load-balancer
+   access logs that record the request line.
 6. Sets the local terminal to raw mode and pipes bytes both directions.
    `SIGWINCH` is forwarded so the remote PTY tracks your window size.
 
