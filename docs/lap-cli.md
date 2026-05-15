@@ -6,7 +6,7 @@ WebSocket, and hands credentials to the agent as stub placeholders that
 vault swaps for the real values at egress.
 
 ```
-~/code/payments $ lap claude --agent claude-code-cli1
+~/code/payments $ lap claude-code-cli1
   ✓ agent claude-code-cli1 (ac70ab02, harness=claude-code)
   ✓ session 8c12262c
   waiting for sandbox. ready
@@ -56,7 +56,7 @@ Config is written with mode `0600`. To clear it: `lap logout`.
 ## Spin up a sandbox
 
 ```bash
-lap claude --agent claude-code-cli1
+lap claude-code-cli1
 ```
 
 What happens:
