@@ -58,6 +58,10 @@ Architecture and tuning: [docs/k8s-backend.md](docs/k8s-backend.md).
 
 Recommended path: AWS EKS for the sandbox cluster, Render for web + worker. See [`deploy/`](deploy/) — `bin/eks-up.sh` provisions the cluster, the Render Blueprint at the top of [`deploy/render/README.md`](deploy/render/README.md) is one click.
 
+## Architecture
+
+<img width="1997" height="1219" alt="Xnapper-2026-05-08-19 10 50" src="https://raw.githubusercontent.com/BerriAI/litellm-docs/main/static/img/litellm_agent_platform_alpha.png" />
+
 ## Developer API
 
 Create an agent, open a session, send a message, read the reply — directly with curl. See [`docs/spawn-task-agent.md`](docs/spawn-task-agent.md) and [`src/server/DEVELOPER.md`](src/server/DEVELOPER.md).
