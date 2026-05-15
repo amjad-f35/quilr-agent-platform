@@ -25,9 +25,15 @@ git clone https://github.com/BerriAI/litellm-agent-platform.git
 cd litellm-agent-platform/cli
 npm install
 chmod +x bin/lap.mjs
-# Optional: put it on your PATH
-ln -sf "$PWD/bin/lap.mjs" /usr/local/bin/lap
+# Optional: put it on your PATH (user-owned dir, no sudo needed)
+mkdir -p ~/.local/bin
+ln -sf "$PWD/bin/lap.mjs" ~/.local/bin/lap
+# Add ~/.local/bin to PATH if it isn't already:
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
 ```
+
+> Prefer `/usr/local/bin`? It needs root on most systems:
+> `sudo ln -sf "$PWD/bin/lap.mjs" /usr/local/bin/lap`.
 
 ## Configure (one-time)
 
