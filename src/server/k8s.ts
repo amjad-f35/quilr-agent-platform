@@ -301,14 +301,15 @@ async function buildContainerEnv(
     ...(env_vars ?? {}),
     ...base,
     // Route outbound HTTPS through the in-pod vault sidecar so it can swap
-    // stubs for real secrets at egress. Vault's CA is baked into the
-    // harness image's system trust store at build time, which covers
-    // git/curl/python/go/ruby. Node fetch and SEA binaries read
-    // NODE_EXTRA_CA_CERTS, not the OS store — point them at the bundle.
+    // stubs for real secrets at egress. The vault CA cert is mounted into
+    // the harness container at /etc/vault-ca/tls.crt (see volumeMounts below).
+    // git/curl/python/go/ruby trust the OS store (updated at image build time).
+    // Node fetch and SEA binaries (e.g. Claude Code) read NODE_EXTRA_CA_CERTS —
+    // point it at the mounted vault CA so those runtimes trust the proxy too.
     HTTPS_PROXY: "http://127.0.0.1:14322",
     HTTP_PROXY: "http://127.0.0.1:14322",
     NO_PROXY: "localhost,127.0.0.1,.svc.cluster.local,.svc,.cluster.local",
-    NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt",
+    NODE_EXTRA_CA_CERTS: "/etc/vault-ca/tls.crt",
     VAULT_ENABLED: "true",
   };
   return Object.entries(merged).map(([name, value]) => ({ name, value }));
@@ -443,6 +444,11 @@ export async function runTask(
               env: await buildContainerEnv(opts),
               volumeMounts: [
                 { name: "lap-shared", mountPath: "/lap-shared", readOnly: true },
+                // Vault CA: the vault sidecar MITM-proxies all egress HTTPS so
+                // it can swap credential stubs for real values at the wire.
+                // NODE_EXTRA_CA_CERTS must point at this cert so Node (and any
+                // SEA binary like Claude Code) trusts the vault's TLS intercept.
+                { name: "vault-ca", mountPath: "/etc/vault-ca", readOnly: true },
               ],
               resources: {
                 // Opencode is mostly idle between LLM round-trips — it's a
