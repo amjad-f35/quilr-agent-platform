@@ -423,9 +423,11 @@ function help() {
 
   \x1b[2mUSAGE\x1b[0m
     lap                             interactive wizard (login + agent picker)
-    lap <agent-name>                open the agent's TUI in a sandbox
+    lap <agent-name>                open the agent's TUI in a fresh sandbox
     lap --agent <name>              same as above (flag form)
     lap agents                      list agents on the platform ([tui] = compatible)
+    lap sessions                    list active sessions you can reattach to
+    lap reattach <id>               reattach to an active session (8-char prefix OK)
     lap login                       set base URL + master key (one-time)
     lap config                      show current config
     lap logout                      delete config
@@ -433,9 +435,111 @@ function help() {
   \x1b[2mEXAMPLE\x1b[0m
     lap                             # first run — banner, login, pick
     lap refactor-bot                # fast path once you know the name
+    lap sessions                    # list what's alive (after Ctrl-D, etc.)
+    lap reattach 5a5953cd           # hop back into a specific session
 
   Config:  ${CONFIG}
 `);
+}
+
+// Short human-readable age like "3m" or "2h" or "1d". The platform's
+// sessions list is sorted newest-first, so most rows render as minutes.
+function shortAge(iso) {
+  if (!iso) return "?";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "?";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+// `lap sessions` — list active sessions the user can reattach to.
+// The platform keeps detached sessions alive for ~24h, so the same row
+// can be reattached repeatedly after Ctrl-D. We hide dead/failed/stopped
+// rows because they can't be reattached.
+async function sessionsCmd() {
+  const cfg = loadConfig();
+  if (!cfg) { console.error("  (no config — run `lap login`)"); process.exit(1); }
+  const [sR, aR] = await Promise.all([
+    fetch(`${cfg.base}/api/v1/managed_agents/sessions?limit=50`, {
+      headers: { authorization: `Bearer ${cfg.key}` },
+    }),
+    fetch(`${cfg.base}/api/v1/managed_agents/agents`, {
+      headers: { authorization: `Bearer ${cfg.key}` },
+    }),
+  ]);
+  if (!sR.ok) { console.error(`  ✗ sessions: ${sR.status} ${sR.statusText}`); process.exit(1); }
+  if (!aR.ok) { console.error(`  ✗ agents: ${aR.status} ${aR.statusText}`); process.exit(1); }
+  const sessions = await sR.json();
+  const { data: agents } = await aR.json();
+  const byAgent = new Map(agents.map(a => [a.id, a]));
+  const live = sessions.filter(s => s.status === "ready" || s.status === "creating");
+  if (live.length === 0) {
+    console.log(`  ${ansi.dim("no active sessions. open one with `lap <agent-name>`.")}`);
+    return;
+  }
+  for (const s of live) {
+    const id = s.id.slice(0, 8);
+    const agent = byAgent.get(s.agent_id);
+    const name = (agent?.name ?? "<unknown>").padEnd(28);
+    const status = s.status === "ready" ? ansi.cyan("ready  ") : ansi.yellow("creating");
+    const age = `started ${shortAge(s.created_at)} ago`;
+    const last = s.last_seen_at ? `, last activity ${shortAge(s.last_seen_at)} ago` : "";
+    console.log(`  ${ansi.bold(id)}  ${name} ${status}  ${ansi.dim(age + last)}`);
+  }
+  console.log(`\n  ${ansi.dim("reattach with: `lap reattach <id>` (8-char prefix works)")}`);
+}
+
+// `lap reattach <id-or-prefix>` — pull the session row, hand off to
+// attachPty. Skip the POST-create + readiness poll path entirely so a
+// user who Ctrl-D'd out can hop back into the exact same harness PTY,
+// scrollback and all.
+async function reattachCmd(rawId) {
+  if (!rawId) {
+    console.error("  usage: lap reattach <session-id>  (8-char prefix accepted)");
+    console.error("  list:  lap sessions");
+    process.exit(2);
+  }
+  const cfg = loadConfig();
+  if (!cfg) { console.error("  (no config — run `lap login`)"); process.exit(1); }
+  // Resolve prefix → full id by listing if needed. Full UUIDs (36 chars
+  // with hyphens) skip the list call.
+  let sessionId = rawId;
+  if (rawId.length < 36) {
+    const r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions?limit=200`, {
+      headers: { authorization: `Bearer ${cfg.key}` },
+    });
+    if (!r.ok) { console.error(`  ✗ list: ${r.status} ${r.statusText}`); process.exit(1); }
+    const sessions = await r.json();
+    const matches = sessions.filter(s => s.id.startsWith(rawId));
+    if (matches.length === 0) {
+      console.error(`  ${ansi.red(`✗ no session matches prefix '${rawId}'.`)}  ${ansi.dim("run `lap sessions`")}`);
+      process.exit(1);
+    }
+    if (matches.length > 1) {
+      console.error(`  ${ansi.red(`✗ prefix '${rawId}' is ambiguous`)} (${matches.length} matches). use a longer prefix.`);
+      process.exit(1);
+    }
+    sessionId = matches[0].id;
+  }
+  const r = await fetch(`${cfg.base}/api/v1/managed_agents/sessions/${sessionId}`, {
+    headers: { authorization: `Bearer ${cfg.key}` },
+  });
+  if (!r.ok) { console.error(`  ${ansi.red(`✗ session ${sessionId}: ${r.status} ${r.statusText}`)}`); process.exit(1); }
+  const session = await r.json();
+  if (session.status !== "ready") {
+    console.error(`  ${ansi.red(`✗ session is ${session.status}, cannot reattach.`)}  ${ansi.dim("only `ready` sessions are reattachable.")}`);
+    process.exit(1);
+  }
+  const resolved = resolveWsTarget(session, cfg);
+  if (!resolved) process.exit(1);
+  console.log(`  ${ansi.green("✓")} reattaching to ${ansi.cyan(sessionId.slice(0, 8))}  ${ansi.dim(`→ ${resolved.wsUrl}`)}`);
+  console.log(`  ${ansi.dim("(press Ctrl-D to detach again — session stays alive 24h)")}\n`);
+  await attachPty(resolved.wsUrl, resolved.ttyToken);
 }
 
 async function agentsCmd() {
@@ -508,6 +612,8 @@ async function main() {
     case "help":   help(); break;
     case "login":  await login(); break;
     case "agents": await agentsCmd(); break;
+    case "sessions": await sessionsCmd(); break;
+    case "reattach": await reattachCmd(args[1]); break;
     case "config": {
       const c = loadConfig();
       if (!c) console.log("  (no config — run `lap login`)");
