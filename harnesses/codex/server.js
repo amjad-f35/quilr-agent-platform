@@ -41,6 +41,17 @@ const MIME = {
 const CMD = process.env.POC_CMD ?? "codex";
 const REPO_DIR = process.env.REPO_DIR ?? process.cwd();
 
+// Wrap codex in a tmux session so it survives WS reconnects — `lap` is a
+// fixed session name (one agent per sandbox pod). `tmux new-session -A`
+// creates the session on first attach and reattaches to the existing one
+// thereafter, so `lap --resume <id>` lands on the in-progress codex REPL
+// with full scrollback / conversation instead of a fresh sign-in screen.
+// Killing the spawned pty on ws-close kills the tmux *client*, not the
+// server, so codex and its memory persist for the next attach. Mirrors
+// the pattern already used by harnesses/claude-code.
+const SPAWN_CMD = "tmux";
+const SPAWN_ARGS = ["new-session", "-A", "-s", "lap", CMD];
+
 // Auth token. Empty → fail-closed: all auth-gated requests are rejected.
 // The platform is expected to set this per-pod at sandbox-create time and
 // hand the same value back to authenticated session clients.
@@ -205,7 +216,7 @@ const wss = new WebSocketServer({
 wss.on("connection", (ws) => {
   let term;
   try {
-    term = pty.spawn(CMD, [], {
+    term = pty.spawn(SPAWN_CMD, SPAWN_ARGS, {
       name: "xterm-256color",
       cols: 100,
       rows: 30,
