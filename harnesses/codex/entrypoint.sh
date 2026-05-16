@@ -6,6 +6,35 @@ set -euo pipefail
 
 . /opt/lap/common.sh
 
+# Pre-create ~/.codex/auth.json so the codex TUI skips the "Sign in with
+# ChatGPT / Device Code / Provide API key" welcome screen on first launch.
+# Codex looks up its api key from this file before falling back to
+# OPENAI_API_KEY env, and even when OPENAI_API_KEY is set the TUI shows the
+# sign-in chooser unless auth.json exists with auth_mode=apikey. Mirroring
+# the file shape codex writes after the user picks option 3 interactively.
+# The stub key from vault (/lap-shared/env) is what we write; vault swaps
+# it for the real key at egress.
+if [ -n "${LITELLM_API_KEY:-}" ]; then
+  mkdir -p "$HOME/.codex"
+  cat > "$HOME/.codex/auth.json" <<EOF
+{
+  "auth_mode": "apikey",
+  "OPENAI_API_KEY": "$LITELLM_API_KEY"
+}
+EOF
+  chmod 600 "$HOME/.codex/auth.json"
+  # Also trust the workspace and dismiss the model NUX so the TUI lands
+  # straight on the prompt instead of an "approve this directory?" gate.
+  cat > "$HOME/.codex/config.toml" <<EOF
+[projects."$REPO_DIR"]
+trust_level = "trusted"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 1
+EOF
+  chmod 600 "$HOME/.codex/config.toml"
+fi
+
 # Hydrate attached skills as ~/.claude/skills/<slug>/SKILL.md when present.
 # Codex doesn't read this directory natively today, but we materialize the
 # files anyway so the user can `cat` / reference them inside the TUI, and so
