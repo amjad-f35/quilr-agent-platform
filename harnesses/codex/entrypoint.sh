@@ -23,15 +23,41 @@ if [ -n "${LITELLM_API_KEY:-}" ]; then
 }
 EOF
   chmod 600 "$HOME/.codex/auth.json"
-  # Also trust the workspace and dismiss the model NUX so the TUI lands
-  # straight on the prompt instead of an "approve this directory?" gate.
-  cat > "$HOME/.codex/config.toml" <<EOF
+  # Also trust the workspace, dismiss the model NUX, AND route the model
+  # client through the LiteLLM gateway via `wire_api = "chat"`. Without a
+  # [model_providers.litellm] block, codex defaults to wire_api =
+  # "responses", which hardcodes wss://api.openai.com/v1/responses and
+  # IGNORES OPENAI_BASE_URL — every chat blows up with a 401 against the
+  # real OpenAI endpoint using the (rejected) LiteLLM key. `wire_api =
+  # "chat"` makes codex use OpenAI Chat Completions over plain HTTP,
+  # which LiteLLM speaks. `model_provider = "litellm"` selects this
+  # provider as default; the agent's model string (e.g. "openai/gpt-5.5")
+  # passes through unchanged to LiteLLM's router.
+  if [ -n "${LITELLM_API_BASE:-}" ]; then
+    cat > "$HOME/.codex/config.toml" <<EOF
+model_provider = "litellm"
+
+[projects."$REPO_DIR"]
+trust_level = "trusted"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 1
+
+[model_providers.litellm]
+name = "LiteLLM Gateway"
+base_url = "${LITELLM_API_BASE%/}/v1"
+wire_api = "chat"
+env_key = "OPENAI_API_KEY"
+EOF
+  else
+    cat > "$HOME/.codex/config.toml" <<EOF
 [projects."$REPO_DIR"]
 trust_level = "trusted"
 
 [tui.model_availability_nux]
 "gpt-5.5" = 1
 EOF
+  fi
   chmod 600 "$HOME/.codex/config.toml"
 fi
 
