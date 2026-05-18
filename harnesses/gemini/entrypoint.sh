@@ -46,20 +46,42 @@ fi
 # credential + routing produce a real model reply WITHOUT needing the WS
 # /tty proxy (useful as a smoke test on a regressed proxy). Non-fatal on
 # failure — TUI flow still starts below.
+# Vertex AI auto-config. Vault stubs every agent.env_var value, so any
+# config that the CLI reads locally (booleans, paths) is opaque garbage
+# inside the container — vault only swaps stubs at the HTTPS wire, not
+# at local file reads. So pulling Vertex settings out of agent.env_vars
+# doesn't work.
+#
+# Instead: when a service-account JSON is present at /work/repo/key.json
+# (cloned in via REPO_URL), auto-derive everything the gemini CLI needs
+# from the JSON itself + safe defaults. Real values, not vault stubs.
+SA_JSON_PATH="/work/repo/key.json"
+if [ -f "$SA_JSON_PATH" ] && grep -q '"private_key"' "$SA_JSON_PATH" 2>/dev/null; then
+  export GOOGLE_APPLICATION_CREDENTIALS="$SA_JSON_PATH"
+  export GOOGLE_GENAI_USE_VERTEXAI=true
+  _proj=$(node -e "try{process.stdout.write(JSON.parse(require('fs').readFileSync('$SA_JSON_PATH','utf8')).project_id||'')}catch(e){}")
+  [ -n "$_proj" ] && export GOOGLE_CLOUD_PROJECT="$_proj"
+  # If GOOGLE_CLOUD_LOCATION was stubbed by vault or never set, default to us-central1.
+  case "${GOOGLE_CLOUD_LOCATION:-}" in
+    stub_*|"") export GOOGLE_CLOUD_LOCATION=us-central1 ;;
+  esac
+  echo "[entrypoint] vertex auto-config: project=$GOOGLE_CLOUD_PROJECT location=$GOOGLE_CLOUD_LOCATION"
+fi
+
 if [ -n "${GEMINI_SELFTEST_PROMPT:-}" ]; then
+  # GEMINI_SELFTEST_PROMPT itself is stubbed; recover the real value from
+  # /lap-shared/env which holds the unencrypted file vault wrote. Strip
+  # only that key, treat content as the literal prompt.
+  _prompt=$(grep '^GEMINI_SELFTEST_PROMPT=' /lap-shared/env 2>/dev/null | cut -d= -f2-)
+  : "${_prompt:=$GEMINI_SELFTEST_PROMPT}"
   echo "[selftest] env probe:"
   echo "  GOOGLE_GENAI_USE_VERTEXAI=${GOOGLE_GENAI_USE_VERTEXAI:-<unset>}"
   echo "  GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-<unset>}"
   echo "  GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-<unset>}"
   echo "  GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-<unset>}"
-  echo "  GEMINI_API_KEY=${GEMINI_API_KEY:+<set>}${GEMINI_API_KEY:-<unset>}"
-  echo "  ls /work/repo:"
-  ls -la /work/repo 2>&1 | head -5
-  echo "  /lap-shared/env contents (keys only):"
-  sed 's/=.*$/=<value>/' /lap-shared/env 2>/dev/null | head -10
-  echo "[selftest] running: gemini -p ..."
+  echo "[selftest] running: gemini -p (prompt: $_prompt)"
   echo "[selftest-begin]"
-  gemini -p "$GEMINI_SELFTEST_PROMPT" 2>&1 || echo "[selftest] gemini exited non-zero"
+  gemini -p "$_prompt" 2>&1 || echo "[selftest] gemini exited non-zero"
   echo "[selftest-end]"
 fi
 
