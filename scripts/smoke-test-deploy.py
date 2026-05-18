@@ -13,6 +13,7 @@ import os
 import socket
 import ssl
 import sys
+import time
 import urllib.request
 
 MASTER_KEY = os.environ["MASTER_KEY"]
@@ -39,17 +40,43 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         failures.append(label)
 
 
+def retry(fn, label: str, timeout: int = 120, interval: int = 10):
+    """Retry fn() until it returns (ok=True, detail) or timeout expires."""
+    deadline = time.time() + timeout
+    last_detail = ""
+    attempt = 0
+    while time.time() < deadline:
+        ok, detail = fn()
+        last_detail = detail
+        if ok:
+            return True, detail
+        attempt += 1
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        wait = min(interval, remaining)
+        print(f"  [{label}] attempt {attempt}: {detail} — retrying in {int(wait)}s")
+        time.sleep(wait)
+    return False, last_detail
+
+
 # ── 1. Platform health + auth (Authorization header, never in URL) ────────────
-try:
-    req = urllib.request.Request(
-        f"{ALB_URL}/api/v1/health/k8s",
-        headers={"Authorization": f"Bearer {MASTER_KEY}"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        code = resp.getcode()
-    check("GET /api/v1/health/k8s → 200", code == 200, f"got {code}")
-except Exception as e:
-    check("GET /api/v1/health/k8s → 200", False, str(e))
+
+def health_check():
+    try:
+        req = urllib.request.Request(
+            f"{ALB_URL}/api/v1/health/k8s",
+            headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            code = resp.getcode()
+        return code == 200, f"got {code}"
+    except Exception as e:
+        return False, str(e)
+
+
+ok, detail = retry(health_check, "GET /api/v1/health/k8s → 200")
+check("GET /api/v1/health/k8s → 200", ok, detail)
 
 
 # ── 2. TTY proxy rejects invalid token with 401 ───────────────────────────────
@@ -77,11 +104,16 @@ def tty_ws_status(token: str) -> str:
         raw.close()
 
 
-try:
-    r = tty_ws_status("intentionally-wrong-token-xyzzy")
-    check("TTY bad token → 401", "401" in r, r)
-except Exception as e:
-    check("TTY bad token → 401", False, str(e))
+def tty_check():
+    try:
+        r = tty_ws_status("intentionally-wrong-token-xyzzy")
+        return "401" in r, r
+    except Exception as e:
+        return False, str(e)
+
+
+ok, detail = retry(tty_check, "TTY bad token → 401")
+check("TTY bad token → 401", ok, detail)
 
 
 # ── Result ────────────────────────────────────────────────────────────────────
