@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FileCode, Globe, Plus, Trash2 } from "lucide-react";
+import { FileCode, Globe, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { SANDBOX_TEMPLATES_STORAGE_KEY } from "@/lib/constants";
@@ -49,7 +49,7 @@ function saveLocalTemplates(ts: LocalTemplate[]): void {
   try { window.localStorage.setItem(SANDBOX_TEMPLATES_STORAGE_KEY, JSON.stringify(ts)); } catch { /* ignore */ }
 }
 
-function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelete?: () => void }) {
+function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelete?: () => void; }) {
   const envKeys = Object.keys(template.env_vars ?? {});
   const allowOut = template.allow_out ?? [];
   const denyOut = template.deny_out ?? [];
@@ -65,14 +65,23 @@ function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelet
             </p>
           )}
         </div>
-        <button
-          type="button"
-          aria-label={`Delete ${template.name}`}
-          onClick={onDelete}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:hover:bg-red-950 dark:hover:text-red-400"
-        >
-          <Trash2 className="size-3.5" aria-hidden />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Link
+            href={`/templates/${template.id}/edit`}
+            aria-label={`Edit ${template.name}`}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <Pencil className="size-3.5" aria-hidden />
+          </Link>
+          <button
+            type="button"
+            aria-label={`Delete ${template.name}`}
+            onClick={onDelete}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:hover:bg-red-950 dark:hover:text-red-400"
+          >
+            <Trash2 className="size-3.5" aria-hidden />
+          </button>
+        </div>
       </div>
 
       {envKeys.length > 0 && (
