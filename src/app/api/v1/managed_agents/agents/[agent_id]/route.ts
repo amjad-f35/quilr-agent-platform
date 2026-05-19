@@ -9,6 +9,7 @@
 
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { parseCronSpec } from "@/server/cron";
 import { invalidateWarmTasks } from "@/server/memory";
 import {
   encryptEnvVars,
@@ -54,6 +55,61 @@ export const PATCH = wrap<RouteContext>(async (req, ctx) => {
 
   const existing = await prisma.agent.findUnique({ where: { agent_id } });
   if (existing === null) httpError(404, `agent '${agent_id}' not found`);
+
+  // Cron fields. Schedule and timezone are validated *together* so the
+  // user gets a single 400 on the bad pair rather than a misleading error
+  // on whichever field happened to be evaluated first. When either changes
+  // we recompute cron_next_fire_at so the next tick fires on the new
+  // cadence — without this, an agent moved from "@daily" to "* * * * *"
+  // would still wait until tomorrow before the next fire.
+  //
+  // Treat `""` as "clear the schedule" so the UI can drop the cron without
+  // having to send `null` in JSON (which some clients normalize to undef).
+  const wantsScheduleChange = body.cron_schedule !== undefined;
+  const wantsTimezoneChange = body.cron_timezone !== undefined;
+  if (wantsScheduleChange || wantsTimezoneChange) {
+    const nextSchedule =
+      wantsScheduleChange
+        ? (body.cron_schedule === "" ? null : body.cron_schedule ?? null)
+        : ((existing as unknown as Record<string, unknown>).cron_schedule as
+            | string
+            | null
+            | undefined) ?? null;
+    const nextTimezone =
+      body.cron_timezone ??
+      (((existing as unknown as Record<string, unknown>).cron_timezone as
+        | string
+        | undefined) ?? "UTC");
+    let nextFire: Date | null = null;
+    try {
+      const parsed = parseCronSpec(nextSchedule, nextTimezone);
+      nextFire = parsed.next;
+    } catch (e) {
+      httpError(400, e instanceof Error ? e.message : String(e));
+    }
+    // Cast through unknown — the generated Prisma client may not yet know
+    // about the cron_* columns in pre-generate environments.
+    const cronPatch = data as unknown as Record<string, unknown>;
+    cronPatch.cron_schedule = nextSchedule;
+    cronPatch.cron_timezone = nextTimezone;
+    cronPatch.cron_next_fire_at = nextFire;
+  }
+  if (body.cron_enabled !== undefined) {
+    const cronPatch = data as unknown as Record<string, unknown>;
+    cronPatch.cron_enabled = body.cron_enabled;
+    // Flipping enabled off doesn't clear cron_next_fire_at — that way
+    // toggling back on resumes from the existing schedule without losing
+    // the cadence. The tick query filters on cron_enabled = true, so the
+    // disabled row is invisible to the scheduler regardless.
+    //
+    // Flipping enabled on with no schedule set is a no-op (the scheduler
+    // also filters on cron_schedule IS NOT NULL). Don't error — letting
+    // users pre-arm the toggle before adding a schedule is a fine UX.
+  }
+  if (body.cron_overlap_policy !== undefined) {
+    const cronPatch = data as unknown as Record<string, unknown>;
+    cronPatch.cron_overlap_policy = body.cron_overlap_policy;
+  }
 
   // env_vars replace flow: user supplies the new user-editable map; we
   // preserve any reserved-key entries already on the row (e.g.
