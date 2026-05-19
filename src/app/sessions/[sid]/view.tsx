@@ -310,14 +310,25 @@ export default function SessionThreadView() {
 
   // Subscribe to the session-wide SSE while the harness is up. The hook
   // accumulates SDKMessage[] in local state but `SdkStreamPanel` is not
-  // rendered today — we use the array length only as a "new harness event"
-  // signal to drive `refreshThread()` below. This is what makes
-  // externally-triggered turns (Slack webhook → /message → harness bus)
-  // paint on the open tab without waiting for the 5s poll cycle.
+  // rendered today — we use `framesReceived` as a "new harness event" signal
+  // to drive `refreshThread()` below. This is what makes externally-triggered
+  // turns (Slack webhook → /message → harness bus) paint on the open tab
+  // without waiting for the 5s poll cycle.
+  //
+  // Why frames and not `sdkMessages.length`: at end-of-turn the harness emits
+  // `claude_sdk_message` frames BEFORE pushing the assistant onto its
+  // history, then emits `message.updated` AFTER the push. A length-based
+  // trigger only fires during the pre-push window, so every refresh inside
+  // the turn reads /messages back as user-only. Depending on `framesReceived`
+  // (which also ticks for `message.updated`) guarantees one more refresh
+  // after the assistant is actually in /messages.
   const sdkStreamEnabled = !!sessionId && session?.status === "ready";
-  const { messages: sdkMessages, status: sdkStreamStatus } =
-    useSdkMessageStream(sessionId, sdkStreamEnabled);
-  const lastSdkLenRef = useRef(0);
+  const {
+    messages: sdkMessages,
+    status: sdkStreamStatus,
+    framesReceived,
+  } = useSdkMessageStream(sessionId, sdkStreamEnabled);
+  const lastFramesRef = useRef(0);
 
   // Pull the full opencode thread and replace local state. Source of truth
   // lives in the harness — POST /message only returns the final assistant
@@ -363,11 +374,11 @@ export default function SessionThreadView() {
   // into `messages`, and a mid-stream refresh would clobber them with the
   // older harness-side snapshot.
   useEffect(() => {
-    if (sdkMessages.length === lastSdkLenRef.current) return;
-    lastSdkLenRef.current = sdkMessages.length;
+    if (framesReceived === lastFramesRef.current) return;
+    lastFramesRef.current = framesReceived;
     if (drainingRef.current) return;
     void refreshThread();
-  }, [sdkMessages.length, refreshThread]);
+  }, [framesReceived, refreshThread]);
 
   const loadSession = useCallback(async () => {
     if (!sessionId) return;
