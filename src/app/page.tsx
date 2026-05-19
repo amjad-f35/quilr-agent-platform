@@ -211,13 +211,6 @@ export default function LandingPage() {
             {selectedAgent?.model ?? "—"}
           </span>
           <div className="flex-1" />
-          <button
-            type="button"
-            onClick={() => router.push("/agents/new")}
-            className="text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <span className="font-bold">run</span> agent
-          </button>
         </div>
       </div>
 
@@ -247,6 +240,7 @@ export default function LandingPage() {
       {spawning && (
         <p className="text-[12px] text-muted-foreground">Starting session…</p>
       )}
+
     </div>
   );
 }
