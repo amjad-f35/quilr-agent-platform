@@ -258,6 +258,11 @@ metadata:
   namespace: default
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    # TCP pass-through so the ELB does not terminate HTTP and strip the
+    # Upgrade: websocket header. Without this the ELB operates in HTTP mode,
+    # strips the Upgrade header, and returns 502 when the backend responds
+    # with 101 Switching Protocols — breaking the /tty WebSocket path.
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
     # WebSocket traffic to /tty often pauses for >60s (the AWS ELB default
     # idle timeout) while the model thinks or the user reads a permission
     # prompt. Without this annotation the ELB silently drops the connection
