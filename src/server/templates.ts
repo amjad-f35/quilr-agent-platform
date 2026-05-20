@@ -137,12 +137,14 @@ function loadTemplates(): AgentTemplate[] {
   }
 }
 
-const TEMPLATES: AgentTemplate[] = loadTemplates();
-
+// Read from disk on every call so that template changes (prompt bumps, version
+// increments) take effect on the next session spawn or API request without
+// requiring a process restart. The file is small and reads are infrequent
+// (once per session spawn, once per agent GET), so the I/O cost is negligible.
 export function listTemplates(): AgentTemplate[] {
-  return TEMPLATES;
+  return loadTemplates();
 }
 
 export function getTemplate(id: string): AgentTemplate | undefined {
-  return TEMPLATES.find((t) => t.id === id);
+  return loadTemplates().find((t) => t.id === id);
 }
