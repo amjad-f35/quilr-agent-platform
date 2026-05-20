@@ -1,5 +1,6 @@
 import { fetch } from "undici";
 
+import { prisma } from "./db";
 import type { AgentRow, HarnessMessage } from "./types";
 import {
   provisionSandbox,
@@ -254,6 +255,47 @@ export function createInlineBrainSession(
   sessions.set(session_id, { messages, agent });
 }
 
+/**
+ * Rebuild the in-process ChatMessage array from the DB Session.history
+ * snapshot when the process-local sessions map is empty (e.g. after a
+ * process restart or a request hitting a different replica). Returns null
+ * when there is no history to replay.
+ */
+async function hydrateFromDb(
+  session_id: string,
+  agent: AgentRow,
+): Promise<SessionState | null> {
+  let row: { history: unknown } | null = null;
+  try {
+    row = await prisma.session.findUnique({
+      where: { session_id },
+      select: { history: true },
+    });
+  } catch {
+    return null;
+  }
+  if (!row || !Array.isArray(row.history) || row.history.length === 0) {
+    return null;
+  }
+
+  const messages: ChatMessage[] = [
+    { role: "system", content: agent.prompt ?? "" },
+  ];
+
+  for (const entry of row.history as HarnessMessage[]) {
+    const role = entry.info?.role;
+    if (role !== "user" && role !== "assistant") continue;
+    const text = (entry.parts ?? [])
+      .map((p) => (p as { text?: string }).text ?? "")
+      .join("");
+    messages.push({ role, content: text });
+  }
+
+  const state: SessionState = { messages, agent };
+  sessions.set(session_id, state);
+  return state;
+}
+
 export async function sendInlineBrainMessage(
   session_id: string,
   text: string,
@@ -267,8 +309,12 @@ export async function sendInlineBrainMessage(
   const turn = prior.then(async () => {
     let state = sessions.get(session_id);
     if (!state) {
-      createInlineBrainSession(session_id, agent);
-      state = sessions.get(session_id)!;
+      // Try to recover from DB history first (process restart / scale-out).
+      // Falls back to a fresh context from the system prompt if no history exists.
+      state = (await hydrateFromDb(session_id, agent)) ?? (() => {
+        createInlineBrainSession(session_id, agent);
+        return sessions.get(session_id)!;
+      })();
     }
     state.messages.push({ role: "user", content: text });
     return runAgentLoop(session_id, state, onEvent);

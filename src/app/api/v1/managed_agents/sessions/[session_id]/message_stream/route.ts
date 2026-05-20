@@ -144,16 +144,16 @@ export async function POST(req: Request, ctx: RouteContext) {
 
           try {
             enq({ type: "ready" });
-            const { response } = await sendInlineBrainMessage(
+            // sendInlineBrainMessage fires onEvent({ type: "assistant_text" })
+            // from inside runAgentLoop, which already enqueues the final reply
+            // via the (e) => enq(...) callback above. Do not emit it again
+            // here — doing so would send the assistant_text event twice.
+            await sendInlineBrainMessage(
               session_id,
               body.text ?? "",
               row.agent,
               (e) => enq({ type: "harness_event", event: e }),
             );
-            enq({
-              type: "harness_event",
-              event: { type: "assistant_text", text: response },
-            });
             // persist history
             const msgs = listInlineBrainMessages(session_id);
             void prisma.session.update({
