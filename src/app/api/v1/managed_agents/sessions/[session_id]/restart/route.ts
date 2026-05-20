@@ -179,6 +179,7 @@ export async function POST(req: Request, ctx: RouteContext) {
         session_id,
         agent_id: agent.agent_id,
         agent_model: agent.model,
+        harness_id: agent.harness_id,
         sandbox_url,
         harness_session_id,
         status: "ready",

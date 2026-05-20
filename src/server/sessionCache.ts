@@ -20,6 +20,7 @@ export interface SessionCacheEntry {
   session_id: string;
   agent_id: string;
   agent_model: string;
+  harness_id: string;
   sandbox_url: string;
   harness_session_id: string;
   status: string;
@@ -81,6 +82,7 @@ async function hydrate(
     session_id: row.session_id,
     agent_id: row.agent_id,
     agent_model: row.agent.model,
+    harness_id: row.agent.harness_id,
     sandbox_url: row.sandbox_url,
     harness_session_id: row.harness_session_id,
     status: row.status,

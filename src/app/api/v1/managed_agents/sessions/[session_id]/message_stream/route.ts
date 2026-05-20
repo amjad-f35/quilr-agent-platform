@@ -53,6 +53,10 @@ import {
   SendMessageBody,
   type HarnessMessagePart,
 } from "@/server/types";
+import {
+  sendInlineBrainMessage,
+  listInlineBrainMessages,
+} from "@/server/inlineBrain";
 
 async function persistHistorySnapshot(opts: {
   session_id: string;
@@ -118,6 +122,51 @@ export async function POST(req: Request, ctx: RouteContext) {
     if (!row || row.status !== "ready") {
       httpError(404, `session ${session_id} not found or not ready`);
     }
+    // brain-inline: no sandbox_url/harness_session_id — brain runs in-process.
+    // Call inlineBrain and stream the response as a single SSE event sequence.
+    if (row.agent.harness_id === "brain-inline") {
+      const stream = new ReadableStream({
+        async start(controller) {
+          const enq = (payload: unknown) =>
+            controller.enqueue(encodeSse(payload));
+          try {
+            enq({ type: "ready" });
+            const { response } = await sendInlineBrainMessage(
+              session_id,
+              body.text ?? "",
+              row.agent,
+            );
+            enq({
+              type: "harness_event",
+              event: { type: "assistant_text", text: response },
+            });
+            // persist history
+            const msgs = listInlineBrainMessages(session_id);
+            void prisma.session.update({
+              where: { session_id },
+              data: { history: msgs as unknown as Prisma.InputJsonValue },
+            }).catch(() => {});
+            enq({ type: "done" });
+          } catch (err) {
+            enq({
+              type: "error",
+              message: err instanceof Error ? err.message : String(err),
+            });
+            enq({ type: "done" });
+          } finally {
+            controller.close();
+          }
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      });
+    }
+
     if (!row.sandbox_url || !row.harness_session_id) {
       httpError(409, `session ${session_id} is not fully provisioned`);
     }

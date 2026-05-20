@@ -973,6 +973,7 @@ export const TAG_AGENT_ID = "litellm_agent_id";
 export const TAG_WARM_TASK_ID = "litellm_warm_task_id";
 export const HARNESS_OPENCODE = "opencode";
 export const HARNESS_CLAUDE_SDK = "claude-agent-sdk";
+export const HARNESS_BRAIN_INLINE = "brain-inline";
 // TUI harnesses — pod exposes /tty (WebSocket) instead of the JSON message API.
 // The session view attaches xterm.js directly.
 export const HARNESS_CLAUDE_CODE = "claude-code";
@@ -993,6 +994,7 @@ export function harnessSupportsTui(harness_id: string): boolean {
 export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
   HARNESS_OPENCODE,
   HARNESS_CLAUDE_SDK,
+  HARNESS_BRAIN_INLINE,
   HARNESS_CLAUDE_CODE,
   HARNESS_CODEX,
   HARNESS_HERMES,
