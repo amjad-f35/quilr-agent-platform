@@ -27,6 +27,7 @@ import {
   Activity,
   ShieldCheck,
   Trash2,
+  Globe,
   MessageSquare,
   ExternalLink,
 } from "lucide-react";
@@ -365,7 +366,9 @@ export default function SessionThreadView() {
   useEffect(() => {
     if (sdkMessages.length === lastSdkLenRef.current) return;
     lastSdkLenRef.current = sdkMessages.length;
-    if (drainingRef.current) return;
+    if (drainingRef.current) {
+      return;
+    }
     void refreshThread();
   }, [sdkMessages.length, refreshThread]);
 
@@ -647,6 +650,23 @@ export default function SessionThreadView() {
                 ? (part as Record<string, unknown>).id
                 : undefined;
               if (part && typeof rawId === "string") {
+                // Guard: if this is a thinking part with empty text, preserve
+                // whatever text the delta stream already accumulated. The SDK
+                // sometimes delivers block.thinking="" in the final assistant
+                // event when streaming thinking_delta events were also sent;
+                // the harness falls back to thinkingAccum but that lookup can
+                // miss if sdkMsgId didn't match. Keep the delta-built text so
+                // the thinking block stays visible.
+                if (
+                  (part as { type?: string }).type === "thinking" &&
+                  !(part as { text?: string }).text
+                ) {
+                  const existing = partsState.get(rawId);
+                  const existingText = (existing as { text?: string } | undefined)?.text;
+                  if (existingText) {
+                    (part as { text?: string }).text = existingText;
+                  }
+                }
                 partsState.set(rawId, part);
                 renderStreaming();
               }
@@ -913,6 +933,18 @@ function MainPanel({
           )}
         </div>
         <div className="flex items-center gap-2 text-muted-foreground">
+          {session?.sandbox_url && (
+            <a
+              href={session.sandbox_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open sandbox preview in new tab"
+              className="inline-flex items-center gap-1.5 text-[12px] border border-border rounded px-2 py-1 text-muted-foreground hover:bg-muted transition-colors"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">View Preview</span>
+            </a>
+          )}
           <button
             type="button"
             onClick={() => session && setVaultOpen(!vaultOpen)}
@@ -1091,12 +1123,16 @@ function MainPanel({
 
           {/*
             Live SDKMessage stream from the harness's new
-            `claude_sdk_message` envelope. Additive — the historical
-            /messages replay below is still the source of truth for the
-            legacy `message.part.*` wire format. If the same logical
-            message appears in both, the streaming row is fresher and
-            wins by being rendered first.
+            `claude_sdk_message` envelope. Shown only when no user-initiated
+            send is in flight (hasInProgress) — that path already streams
+            thinking via message.part.delta deltas into the legacy thread.
+            For external/webhook turns, this panel surfaces tool calls and
+            thinking live without waiting for refreshThread() to complete.
           */}
+          {!hasInProgress && sdkStreamStatus === "streaming" && (
+            <SdkStreamPanel messages={sdkMessages} status={sdkStreamStatus} />
+          )}
+
           {messages.map((m, i) => (
             <MessageBlock
               key={m.id}
@@ -1715,7 +1751,7 @@ function ThinkingBlock({ text }: { text: string }) {
       </button>
       {open ? (
         <div className="border-t border-border px-3 py-2 italic leading-relaxed whitespace-pre-wrap text-muted-foreground">
-          {text}
+          {text || <span className="opacity-50">No thinking content available</span>}
         </div>
       ) : null}
     </div>

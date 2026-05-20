@@ -125,8 +125,12 @@ function emit(s: Session, type: string, props: Record<string, unknown>): void {
     type,
     properties: { ...props, sessionID: s.id },
   };
-  for (const cb of s.busSubscribers) cb(event);
-  for (const cb of globalBusSubscribers) cb(event);
+  for (const cb of s.busSubscribers) {
+    try { cb(event); } catch (err) { console.error("[emit] session subscriber threw:", err); }
+  }
+  for (const cb of globalBusSubscribers) {
+    try { cb(event); } catch (err) { console.error("[emit] global subscriber threw:", err); }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +273,7 @@ async function runTurn(
     nextGlobalIdx: 0,
     currentSdkMsgId: null,
     blockIdxsBySdkMsgId: new Map(),
+    thinkingAccum: new Map(),
   };
 
   try {
@@ -321,6 +326,7 @@ async function runTurn(
       };
     } else {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[runTurn] SDK error session=${s.id}:`, err);
       lastError = { name: "SDKError", data: { message: msg.slice(0, 500) } };
     }
   } finally {
@@ -367,6 +373,13 @@ interface TurnStreamState {
   // blocks have been started, so we just read straight from this map by
   // ev.message.id.
   blockIdxsBySdkMsgId: Map<string, number[]>;
+  // Accumulated thinking text keyed by "${sdkMsgId}:${blockIndex}". Keying
+  // by (sdkMsgId, blockIndex) — not globalIdx — ensures the assistant event
+  // lookup succeeds even when blockIdxsBySdkMsgId misses (e.g. message_start
+  // arrived without an id) and we fall back to fresh globalIdxs. The final
+  // `assistant` event delivers block.thinking="" when the SDK doesn't
+  // re-aggregate streaming thinking_delta events; we fall back to this map.
+  thinkingAccum: Map<string, string>;
 }
 
 function handleSdkEvent(
@@ -433,10 +446,15 @@ function handleSdkEvent(
         // Extended-thinking content block. The model's reasoning, surfaced
         // to the UI as a separate part so it can render distinctly (collapsed
         // gray box, etc) instead of mixing into the visible reply text.
+        // The SDK doesn't always re-aggregate streaming thinking_delta events
+        // into the final assistant message — fall back to what we accumulated
+        // from the stream so the history entry has the full reasoning text.
+        const thinkingKey = `${sdkMsgId}:${idx}`;
+        const streamAccum = turn.thinkingAccum.get(thinkingKey) ?? "";
         const part: PlatformPart = {
           id: partId,
           type: "thinking",
-          text: block.thinking ?? "",
+          text: (block.thinking as string | undefined) || streamAccum,
         };
         parts.push(part);
         emit(s, "message.part.updated", { messageID: msgId, part });
@@ -542,8 +560,13 @@ function handleSdkEvent(
         inner.delta?.type === "thinking_delta" &&
         typeof inner.delta.thinking === "string"
       ) {
-        // Token-level thinking stream when the model emits it. Haiku tends
-        // to bundle thinking (no thinking_delta); sonnet/opus stream it.
+        // Token-level thinking stream. Accumulate into thinkingAccum so the
+        // final assistant event can fall back to this text if block.thinking
+        // arrives empty. Key by "${sdkMsgId}:${blockIndex}" so the lookup in
+        // the assistant event handler matches the same slot.
+        const thinkingKey = `${turn.currentSdkMsgId}:${inner.index}`;
+        const prev = turn.thinkingAccum.get(thinkingKey) ?? "";
+        turn.thinkingAccum.set(thinkingKey, prev + inner.delta.thinking);
         emit(s, "message.part.delta", {
           messageID: msgId,
           partID,
@@ -704,8 +727,14 @@ app.post("/session/:id/abort", async (c) => {
  */
 app.get("/event", (c) =>
   streamSSE(c, async (stream) => {
+    const subscriberId = Math.random().toString(36).slice(2, 8);
+    console.log(`[event/sse] subscriber ${subscriberId} connected`);
     const cb = (e: BusEvent): void => {
-      void stream.writeSSE({ data: JSON.stringify(e) });
+      stream.writeSSE({ data: JSON.stringify(e) }).catch((err: unknown) => {
+        // Swallow write errors — subscriber may have disconnected. The
+        // heartbeat loop will detect stream.aborted and clean up.
+        console.error(`[event/sse] subscriber ${subscriberId} writeSSE failed (type=${e.type}):`, err);
+      });
     };
     globalBusSubscribers.add(cb);
     // First event the platform's stream route waits for before posting the
@@ -718,9 +747,16 @@ app.get("/event", (c) =>
       // intermediate proxies (Render, browsers) from killing idle SSE.
       while (!stream.aborted) {
         await stream.sleep(15_000);
-        await stream.writeSSE({ event: "ping", data: "" });
+        if (stream.aborted) break;
+        try {
+          await stream.writeSSE({ event: "ping", data: "" });
+        } catch (err) {
+          console.error(`[event/sse] subscriber ${subscriberId} heartbeat failed, closing:`, err);
+          break;
+        }
       }
     } finally {
+      console.log(`[event/sse] subscriber ${subscriberId} disconnected`);
       globalBusSubscribers.delete(cb);
     }
   }),
