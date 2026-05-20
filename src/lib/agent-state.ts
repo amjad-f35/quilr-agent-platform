@@ -39,6 +39,16 @@ export interface AgentMessage {
   parts: AgentPart[];
 }
 
+/** A pending permission request the agent is blocked on (opencode asks before
+ *  running a tool unless the config auto-allows it). `sessionID` may be a child
+ *  (subagent) session — respond against THAT session. */
+export interface PermissionRequest {
+  id: string;
+  sessionID: string;
+  title: string;
+  tool?: string;
+}
+
 export interface AgentState {
   /** insertion-ordered messages */
   messages: AgentMessage[];
@@ -46,6 +56,8 @@ export interface AgentState {
   idle: boolean;
   /** set on session.error */
   error?: string;
+  /** permission prompts the agent is currently blocked on */
+  permissions: PermissionRequest[];
 }
 
 /** A verbatim opencode bus frame, as relayed by the /stream endpoint. */
@@ -55,7 +67,7 @@ export interface OpencodeEvent {
 }
 
 export function initState(): AgentState {
-  return { messages: [], idle: false };
+  return { messages: [], idle: false, permissions: [] };
 }
 
 // ── internal immutable helpers (new refs along the changed path → React-safe) ──
@@ -135,12 +147,40 @@ export function applyEvent(state: AgentState, ev: OpencodeEvent): AgentState {
       );
     }
     case "message.part.updated": {
-      const messageID = p.messageID as string | undefined;
-      const part = p.part as AgentPart | undefined;
+      const part = p.part as (AgentPart & { messageID?: string }) | undefined;
+      // opencode carries messageID INSIDE the part; the claude-agent-sdk
+      // harness puts it on properties. Accept either. The message role is set
+      // by message.updated (which precedes), so the create-if-missing default
+      // here is just a fallback.
+      const messageID =
+        part?.messageID ?? (p.messageID as string | undefined);
       if (!messageID || !part?.id) return state;
       return withMessage(state, messageID, "assistant", (m) =>
         setPart(m, part),
       );
+    }
+    case "permission.updated": {
+      // properties IS the Permission object: { id, type, title, sessionID, ... }
+      const id = p.id as string | undefined;
+      if (!id) return state;
+      const req: PermissionRequest = {
+        id,
+        sessionID: (p.sessionID as string) ?? "",
+        title: (p.title as string) ?? (p.type as string) ?? "permission",
+        tool: p.type as string | undefined,
+      };
+      return {
+        ...state,
+        permissions: [...state.permissions.filter((x) => x.id !== id), req],
+      };
+    }
+    case "permission.replied": {
+      const pid = p.permissionID as string | undefined;
+      if (!pid) return state;
+      return {
+        ...state,
+        permissions: state.permissions.filter((x) => x.id !== pid),
+      };
     }
     case "session.error": {
       const message = (p.message as string) ?? "agent error";
@@ -240,5 +280,5 @@ export function seedFromHistory(
       parts: Array.isArray(h.parts) ? h.parts : [],
     });
   }
-  return { messages, idle: true };
+  return { messages, idle: true, permissions: [] };
 }
