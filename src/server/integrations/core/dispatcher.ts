@@ -269,7 +269,7 @@ interface SpawnInput {
 /**
  * Spawn a Session for an integration `new_task`. Returns the new
  * `session_id` on success so the caller can include a deep link in the
- * follow-up ack ("Open in LAP" → /sessions/<id>). Returns null when spawn
+ * follow-up ack ("View session" → /sessions/<id>). Returns null when spawn
  * fails — this function has already forwarded an `error` event to the
  * medium in that case, so the caller should NOT send the "Setting up …"
  * ack on top of it.
@@ -469,7 +469,7 @@ async function handleMessage(input: {
       });
   }
 
-  // Spawn first, ack after — we want the "Open in LAP" button to point at
+  // Spawn first, ack after — we want the "View session" button to point at
   // the actual /sessions/<id> page, not a generic agent dashboard, so the
   // user clicking it lands on their thread's session. Session create just
   // inserts a row (bring-up is async), so this adds <1s to the ack and
@@ -490,7 +490,6 @@ async function handleMessage(input: {
       attachments: event.attachments,
     });
     if (!spawned) return;
-    const sessionUrl = buildSessionUrl(spawned.session_id);
     await integration
       .onSessionEvent({
         install,
@@ -498,9 +497,7 @@ async function handleMessage(input: {
         event: {
           type: "thought",
           body: "Setting up an agent session.",
-          externalUrls: sessionUrl
-            ? [{ url: sessionUrl, label: "Open in LAP" }]
-            : undefined,
+          externalUrls: viewSessionUrls(spawned.session_id),
         },
         agent: binding.agent,
       })
