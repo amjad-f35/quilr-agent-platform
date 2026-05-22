@@ -198,11 +198,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "claude-code unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "claude-code unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "claude-code: :latest not in ECR — building"
+              echo "claude-code: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
@@ -230,11 +235,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "claude-agent-sdk unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "claude-agent-sdk unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "claude-agent-sdk: :latest not in ECR — building"
+              echo "claude-agent-sdk: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
@@ -262,11 +272,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "opencode unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "opencode unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "opencode: :latest not in ECR — building"
+              echo "opencode: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
@@ -294,11 +309,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "codex unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "codex unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "codex: :latest not in ECR — building"
+              echo "codex: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
@@ -326,11 +346,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "hermes unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "hermes unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "hermes: :latest not in ECR — building"
+              echo "hermes: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
@@ -358,11 +383,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "gemini unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "gemini unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "gemini: :latest not in ECR — building"
+              echo "gemini: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
@@ -390,11 +420,16 @@ jobs:
             docker buildx build -f "$DOCKERFILE" -t "$IMG" .
             docker push "$IMG"
           else
-            echo "executor unchanged — retagging"
-            if docker pull "$LATEST" 2>/dev/null; then
+            echo "executor unchanged — checking ECR for SHA tag"
+            if aws ecr describe-images --repository-name litellm-agent-platform \
+                 --image-ids imageTag="$(basename "$IMG" | sed 's/.*://')" \
+                 --region "${{ secrets.AWS_REGION }}" &>/dev/null; then
+              echo "SHA tag already in ECR — nothing to do"
+              exit 0
+            elif docker pull "$LATEST" 2>/dev/null; then
               docker tag "$LATEST" "$IMG" && docker push "$IMG"
             else
-              echo "executor: :latest not in ECR — building"
+              echo "executor: not in ECR — building"
               docker buildx build -f "$DOCKERFILE" -t "$IMG" .
               docker push "$IMG"
             fi
