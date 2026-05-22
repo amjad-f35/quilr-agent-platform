@@ -45,6 +45,7 @@ import {
 import {
   appendUserMessage,
   completeAssistantMessage,
+  markUserMessageFailed,
 } from "@/server/sessionStore";
 import {
   HttpError,
@@ -64,21 +65,6 @@ export const dynamic = "force-dynamic";
 
 interface RouteContext {
   params: Promise<{ session_id: string }>;
-}
-
-// One in-flight rehydrate per session. Concurrent messages that all hit a dead
-// sandbox await the same recovery instead of each spawning a fresh pod.
-const inflightRecoveries = new Map<string, Promise<void>>();
-
-function recoverSessionOnce(
-  session_id: string,
-  run: () => Promise<void>,
-): Promise<void> {
-  const existing = inflightRecoveries.get(session_id);
-  if (existing) return existing;
-  const p = run().finally(() => inflightRecoveries.delete(session_id));
-  inflightRecoveries.set(session_id, p);
-  return p;
 }
 
 async function persistHistorySnapshot(opts: {
@@ -183,14 +169,15 @@ async function recoverAndResend(opts: {
 
   // Bring up a fresh sandbox + replay the thread (excluding this in-flight
   // turn, which we re-send live below). Shared with the /restart route.
-  await recoverSessionOnce(session_id, async () => {
-    await rehydrateSession({
-      agent,
-      session_id,
-      oldTaskArn: row.task_arn,
-      previousHistory,
-      excludeMessageId: user_message_id ?? undefined,
-    });
+  // rehydrateSession self-serializes via a DB-level claim, so concurrent
+  // recoveries (same process or another replica) don't spawn duplicate
+  // sandboxes — the losers wait for the winner.
+  await rehydrateSession({
+    agent,
+    session_id,
+    oldTaskArn: row.task_arn,
+    previousHistory,
+    excludeMessageId: user_message_id ?? undefined,
   });
 
   const recovered = await getCachedSession(session_id);
@@ -284,9 +271,12 @@ export async function POST(req: Request, ctx: RouteContext) {
           throw new HttpError(502, "harness request failed");
         }
       }
-      // Non-connect failure (harness 4xx/5xx): leave the user turn `pending`
-      // so a later restart can replay it, and surface a 502.
+      // Non-connect failure (harness 4xx/5xx): the sandbox is reachable but the
+      // turn errored and won't be retried here, so flag it `failed` (excluded
+      // from replay) rather than leaving a phantom unanswered user turn that a
+      // later restart would replay. Surface a 502.
       console.error("harness send_message failed", err);
+      if (userMsg) void markUserMessageFailed(userMsg.message_id);
       throw new HttpError(502, "harness request failed");
     }
 
