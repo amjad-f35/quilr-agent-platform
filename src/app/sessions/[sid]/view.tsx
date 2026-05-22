@@ -28,6 +28,7 @@ import {
   Check,
   Activity,
   ShieldCheck,
+  ScrollText,
   Trash2,
   MessageSquare,
   ExternalLink,
@@ -57,6 +58,7 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { SlackLogo } from "@/components/slack-logo";
 import { InspectorPanel } from "@/components/inspector-dialog";
 import { VaultPanel } from "@/components/vault-dialog";
+import { SessionLogPanel } from "./session-log-panel";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -531,6 +533,9 @@ export default function SessionThreadView() {
   // states independent so they can be shown together (each renders as a
   // flex-child aside that shrinks the chat column).
   const [vaultOpen, setVaultOpen] = useState(false);
+  // Session Log: another sibling top-level toggle (flex-child aside). Reads the
+  // durable event timeline from the DB so it works even for dead sessions.
+  const [logOpen, setLogOpen] = useState(false);
 
   // Tasks panel is driven entirely by the agent's latest plan-tool call.
   const sessionTasks = useMemo(
@@ -569,8 +574,15 @@ export default function SessionThreadView() {
         setInspectorOpen={setInspectorOpen}
         vaultOpen={vaultOpen}
         setVaultOpen={setVaultOpen}
+        logOpen={logOpen}
+        setLogOpen={setLogOpen}
       />
       <SessionSidebar tasks={sessionTasks} />
+      <SessionLogPanel
+        open={logOpen}
+        onClose={() => setLogOpen(false)}
+        sessionId={sessionId}
+      />
       <VaultPanel
         open={vaultOpen}
         onClose={() => setVaultOpen(false)}
@@ -623,6 +635,8 @@ interface MainPanelProps {
   setInspectorOpen: (v: boolean) => void;
   vaultOpen: boolean;
   setVaultOpen: (v: boolean) => void;
+  logOpen: boolean;
+  setLogOpen: (v: boolean) => void;
 }
 
 function MainPanel({
@@ -653,6 +667,8 @@ function MainPanel({
   setInspectorOpen,
   vaultOpen,
   setVaultOpen,
+  logOpen,
+  setLogOpen,
 }: MainPanelProps) {
   const sessionShortId = session?.id ? session.id.slice(0, 8) : "—";
   const statusLabel = session?.status ?? "unknown";
@@ -776,6 +792,20 @@ function MainPanel({
           >
             <ShieldCheck className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Vault</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => session && setLogOpen(!logOpen)}
+            disabled={!session}
+            title="Session Log — durable event timeline (survives sandbox restarts)"
+            className={`inline-flex items-center gap-1.5 text-[12px] border rounded px-2 py-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              logOpen
+                ? "bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
+                : "border-border text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            <ScrollText className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Log</span>
           </button>
           <button
             type="button"
