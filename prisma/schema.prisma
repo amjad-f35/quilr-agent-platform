@@ -346,15 +346,29 @@ model Project {
 }
 
 model Skill {
-  skill_id    String   @id @default(uuid())
+  skill_id    String         @id @default(uuid())
   name        String
   description String?
   content     String
   created_by  String?
-  created_at  DateTime @default(now())
+  created_at  DateTime       @default(now())
+  versions    SkillVersion[]
 
   @@index([created_by])
   @@map("skill")
+}
+
+model SkillVersion {
+  id                String   @id @default(uuid())
+  skill_id          String
+  content           String
+  version_number    Int
+  changed_by_session_id String?
+  created_at        DateTime @default(now())
+  skill             Skill    @relation(fields: [skill_id], references: [skill_id], onDelete: Cascade)
+
+  @@index([skill_id, version_number])
+  @@map("skill_version")
 }
 
 /// Maps a medium's session id (e.g. Linear agentSession.id) to a LAP Session.

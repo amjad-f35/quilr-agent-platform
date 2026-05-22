@@ -43,7 +43,7 @@ const ACCESS_TOKEN_TTL_SEC = 15 * 60;
 // reaper plus a generous slack. When the pod dies the token is moot.
 const REFRESH_TOKEN_TTL_SEC = 24 * 60 * 60;
 
-export type AgentScope = "memory" | "automations";
+export type AgentScope = "memory" | "automations" | "skills";
 
 interface BaseClaims {
   /** "access" — a regular bearer that authorizes requests under `scope`. */

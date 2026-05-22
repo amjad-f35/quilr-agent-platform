@@ -122,6 +122,33 @@ export interface AgentAuthIdentity {
  * On agent-token rejection we still try master-key — failing both yields
  * a single 401 with no leak about which path was being attempted.
  */
+/**
+ * Like assertAgentTokenOrMaster but without an agent_id constraint.
+ * For routes (e.g. skill update) that any agent with the right scope may call.
+ */
+export function assertAgentScopeOrMaster(
+  req: Request,
+  scope: AgentScope,
+): AgentAuthIdentity {
+  const header = req.headers.get("authorization");
+  if (header === null) throw unauthorized();
+  if (!header.startsWith("Bearer ")) throw unauthorized();
+  const token = header.slice("Bearer ".length);
+
+  const verified = verifyAgentAccessToken(token, { required_scope: scope });
+  if (verified.ok) {
+    return { source: "agent", agent_id: verified.claims.agent_id };
+  }
+
+  const a = Buffer.from(header);
+  const b = Buffer.from(expectedBearer());
+  if (a.length === b.length && timingSafeEqual(a, b)) {
+    return { source: "ui" };
+  }
+
+  throw unauthorized();
+}
+
 export function assertAgentTokenOrMaster(
   req: Request,
   opts: AssertAgentTokenOpts,

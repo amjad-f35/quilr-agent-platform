@@ -377,6 +377,8 @@ export const CreateSessionBody = z.object({
         message: `env_vars cannot override reserved keys: ${[...RESERVED_ENV_KEYS].join(", ")}`,
       },
     ),
+  /** Extra skill IDs to materialize in the sandbox for this session only. */
+  skill_ids: z.array(z.string().uuid()).max(10).optional(),
 });
 export type CreateSessionBody = z.infer<typeof CreateSessionBody>;
 

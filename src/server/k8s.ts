@@ -44,6 +44,7 @@ import {
   resolveHarnessImage,
   type AgentRow,
   type RunTaskOpts,
+  type SandboxFileSpec,
   type TaggedTask,
 } from "@/server/types";
 import type {
@@ -277,7 +278,7 @@ function slugifySkillName(name: string, fallback: string): string {
 // any description string (YAML is a JSON superset for scalars).
 function ensureSkillFrontmatter(
   content: string,
-  meta: { slug: string; name: string; description: string | null },
+  meta: { slug: string; skill_id: string; name: string; description: string | null },
 ): string {
   const trimmed = content.trimStart();
   if (trimmed.startsWith("---\n") || trimmed.startsWith("---\r\n")) {
@@ -288,6 +289,7 @@ function ensureSkillFrontmatter(
   return [
     "---",
     `name: ${meta.slug}`,
+    `skill_id: ${meta.skill_id}`,
     `description: ${JSON.stringify(description)}`,
     "---",
     "",
@@ -330,9 +332,55 @@ async function buildSkillsJsonForAgent(
       slug,
       content: ensureSkillFrontmatter(row.content, {
         slug,
+        skill_id: row.skill_id,
         name: row.name,
         description: row.description,
       }),
+    });
+  }
+  return out;
+}
+
+/**
+ * Build SandboxFileSpec entries for a list of skill IDs so they can be
+ * written into a session sandbox at bring-up time. Used when skills are
+ * selected ad-hoc (e.g. via slash-command in the general chat) and are not
+ * baked into the agent's prompt markers.
+ */
+export async function buildSkillSandboxFiles(
+  skillIds: string[],
+): Promise<SandboxFileSpec[]> {
+  if (skillIds.length === 0) return [];
+  const skills = await prisma.skill.findMany({
+    where: { skill_id: { in: skillIds } },
+    select: { skill_id: true, name: true, description: true, content: true },
+  });
+  const byId = new Map(skills.map((s) => [s.skill_id, s]));
+  const used = new Set<string>();
+  const out: SandboxFileSpec[] = [];
+  for (const id of skillIds) {
+    const row = byId.get(id);
+    if (!row) continue;
+    let slug = slugifySkillName(row.name, row.skill_id);
+    if (used.has(slug)) {
+      let i = 2;
+      while (used.has(`${slug}-${i}`)) i++;
+      slug = `${slug}-${i}`;
+    }
+    used.add(slug);
+    const content = ensureSkillFrontmatter(row.content, {
+      slug,
+      skill_id: row.skill_id,
+      name: row.name,
+      description: row.description,
+    });
+    const contentBytes = Buffer.from(content, "utf8");
+    out.push({
+      name: `${slug}/SKILL.md`,
+      sandbox_path: `~/.claude/skills/${slug}/SKILL.md`,
+      content: contentBytes.toString("base64"),
+      content_type: "text/markdown",
+      size: contentBytes.length,
     });
   }
   return out;
@@ -520,7 +568,7 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
     // scope set so /agent-auth/refresh can re-derive the grant without a
     // hardcoded default. Widening this list is the only place to edit when
     // new agent scopes are added.
-    const agentScopes: AgentScope[] = ["memory", "automations"];
+    const agentScopes: AgentScope[] = ["memory", "automations", "skills"];
     out.push({
       name: "REAL_LAP_ACCESS_TOKEN",
       value: mintAgentAccessToken({

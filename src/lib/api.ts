@@ -810,6 +810,7 @@ export function getAutomationRun(
 export interface CreateSessionRequest {
   initial_prompt?: string;
   title?: string;
+  skill_ids?: string[];
 }
 
 export function listSessions(agentId?: string): Promise<SessionRow[]> {

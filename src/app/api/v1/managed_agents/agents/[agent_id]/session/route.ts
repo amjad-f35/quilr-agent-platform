@@ -31,6 +31,7 @@ import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import {
+  buildSkillSandboxFiles,
   inlineHarnessUrl,
   runTask,
   waitHttpReady,
@@ -92,6 +93,8 @@ interface BringUpBody {
   title?: string;
   env_vars?: Record<string, string>;
   initial_attachments?: InitialAttachment[];
+  /** Extra skill IDs to inject into the sandbox for this session only. */
+  skill_ids?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -381,11 +384,25 @@ async function finishBringUp(
   // line is effectively a no-op overwrite with the same value.
   await setPhase(session_id, "cloning_repo");
   const cloneStart = Date.now();
+  const skillFiles = body.skill_ids?.length
+    ? await buildSkillSandboxFiles(body.skill_ids)
+    : [];
+  const allFiles = [...files, ...skillFiles];
+
+  // When skills are active, give the agent a way to improve them based on user
+  // feedback. The agent reads skill_id from the SKILL.md frontmatter and calls
+  // the platform PATCH route authenticated with its LAP_ACCESS_TOKEN (which
+  // carries the "skills" scope). Always ask the user before updating.
+  const skillEditingBlock = body.skill_ids?.length
+    ? `\n\n## Skill editing\nYou can update a skill's content when the user asks you to improve it.\nRead the skill_id from the skill's SKILL.md frontmatter, then run:\n\`\`\`bash\ncurl -s -X PATCH "$PLATFORM_URL/api/v1/skills/<skill_id>" \\\n  -H "Authorization: Bearer $LAP_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -H "x-session-id: $SESSION_ID" \\\n  -d "{\"content\": \"<new content>\"}"\n\`\`\`\nAlways show the user what you plan to change and get their confirmation first.`
+    : "";
+  const effectivePrompt = (agent.prompt ?? "") + skillEditingBlock;
+
   const harness_session_id = await harnessCreateSession({
     sandbox_url,
     title: body.title,
-    prompt: agent.prompt ?? undefined,
-    files: files.length > 0 ? files : undefined,
+    prompt: effectivePrompt || undefined,
+    files: allFiles.length > 0 ? allFiles : undefined,
   });
   registry.observe("session_phase_duration_seconds", { phase: "cloning_repo" }, (Date.now() - cloneStart) / 1000);
   // Flip status=ready as soon as the harness handshake completes. The
@@ -632,10 +649,13 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
       : [];
     const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
 
+    const inlineSkillFiles = body.skill_ids?.length
+      ? await buildSkillSandboxFiles(body.skill_ids)
+      : [];
     const harness_session_id = await harnessCreateSession({
       sandbox_url: inlineUrl,
       title: body.title ?? "session",
-      files: sandboxFiles,
+      files: [...sandboxFiles, ...inlineSkillFiles],
       sandbox_tools: true,
       projects,
       agent_id: agent.agent_id,
