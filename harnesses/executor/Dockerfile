@@ -32,7 +32,7 @@ COPY --from=builder /build/harnesses/executor/dist ./dist
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npm install --omit=dev --no-audit --no-fund --legacy-peer-deps \
-    && npx --no-install playwright install chromium \
+    && node node_modules/.bin/playwright install chromium \
     && chown -R sandbox:sandbox /opt/harnesses /opt/ms-playwright
 
 WORKDIR /work
