@@ -70,8 +70,11 @@ COPY --from=builder /app/node_modules ./node_modules
 # "Cannot resolve tsconfig at path: /app/tsconfig.worker.json".
 COPY --from=builder /app/package.json /app/package-lock.json /app/tsconfig.json /app/tsconfig.worker.json ./
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/src/server ./src/server
-COPY --from=builder /app/src/worker ./src/worker
+# Copy the whole src tree, not just src/server + src/worker: the worker
+# transitively imports from src/lib (e.g. @/lib/egress-hosts via src/server/types)
+# and selectively copying subdirs leaves those imports unresolved at runtime
+# ("Cannot find module '@/lib/...'"). Copying all of src/ is the robust fix.
+COPY --from=builder /app/src ./src
 CMD ["npx", "tsx", "src/worker/index.ts"]
 
 # ---------- 5. run (web — default target) ----------
