@@ -22,6 +22,7 @@ import {
   httpError,
   resolveHarnessImage,
   toApiAgent,
+  validateEnvVarHosts,
 } from "@/server/types";
 import { wrap } from "@/server/route-helpers";
 import type { Prisma } from "@prisma/client";
@@ -102,6 +103,14 @@ export const GET = wrap(async (req: Request) => {
 export const POST = wrap(async (req: Request) => {
   const identity = assertAuth(req);
   const body = CreateAgentBody.parse(await req.json());
+  if (body.env_var_hosts) {
+    const err = validateEnvVarHosts(
+      Object.keys(body.env_vars ?? {}),
+      body.allow_out,
+      body.env_var_hosts,
+    );
+    if (err) httpError(400, { error: err });
+  }
   const harness_id = body.harness_id ?? HARNESS_OPENCODE;
   if (!KNOWN_HARNESSES.has(harness_id)) {
     httpError(400, {
@@ -168,6 +177,11 @@ export const POST = wrap(async (req: Request) => {
         ...(body.env_vars ?? {}),
         ...(body.requirements ? { AGENT_REQUIREMENTS: body.requirements } : {}),
       }) as Prisma.InputJsonValue,
+      // env_var_hosts: column added in migration 20260523140000; Prisma client
+      // not yet regenerated, so cast through unknown (same pattern as sandbox_files).
+      ...(body.env_var_hosts
+        ? { env_var_hosts: body.env_var_hosts as unknown as Prisma.InputJsonValue }
+        : {}),
       // Snapshot the harness image at agent-creation time so existing agents
       // keep running the same image even after K8S_HARNESS_IMAGE* is updated.
       task_definition_arn: resolveHarnessImage(harness_id, env),
