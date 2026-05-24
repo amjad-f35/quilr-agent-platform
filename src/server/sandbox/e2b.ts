@@ -78,6 +78,20 @@ export class E2bProvider extends SandboxProvider {
     }
   }
 
+  async readFile(id: string, path: string): Promise<string> {
+    try {
+      const sandbox = await Sandbox.connect(id, { apiKey: this.apiKey });
+      // E2B's files.read returns UTF-8 text by default.
+      return await sandbox.files.read(path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("404") || msg.includes("terminated") || msg.includes("doesn't exist")) {
+        return `error: sandbox expired — call provision to create a new one (${msg})`;
+      }
+      throw err;
+    }
+  }
+
   async terminate(id: string): Promise<void> {
     await Sandbox.kill(id, { apiKey: this.apiKey });
   }

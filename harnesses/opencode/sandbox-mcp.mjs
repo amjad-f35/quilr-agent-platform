@@ -51,6 +51,26 @@ const TOOLS = [
       required: ["sandbox_name", "cmd"],
     },
   },
+  {
+    name: "read_file",
+    description:
+      "Read a file from a provisioned sandbox and return its text content, so you can pull files out of the sandbox into your own workspace (no cat/base64 needed). For large files, read a slice instead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sandbox_name: {
+          type: "string",
+          description: "Label of the provisioned sandbox to read the file from",
+        },
+        path: { type: "string", description: "Absolute path of the file inside the sandbox" },
+        session_id: {
+          type: "string",
+          description: "LAP session ID — required when SESSION_ID env var is not set",
+        },
+      },
+      required: ["sandbox_name", "path"],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -133,6 +153,35 @@ async function execute({ sandbox_name, cmd }) {
   }
 }
 
+const READ_FILE_MAX_BYTES = 256 * 1024;
+
+async function readFile({ sandbox_name, path }) {
+  if (USE_DIRECT) {
+    const sandbox = sandboxes.get(sandbox_name);
+    if (!sandbox) return textResult(`read_file failed: no sandbox "${sandbox_name}" — call provision first`, true);
+    try {
+      const content = await sandbox.files.read(path);
+      if (content.length > READ_FILE_MAX_BYTES)
+        return textResult(`error: file too large to return inline (${content.length} bytes > ${READ_FILE_MAX_BYTES}). Read a smaller slice or split it.`, true);
+      return textResult(content);
+    } catch (e) {
+      return textResult(`read_file error: ${e instanceof Error ? e.message : String(e)}`, true);
+    }
+  }
+  try {
+    const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${ENV_SESSION_ID}/sandbox/read-file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ sandbox_name, path }),
+    });
+    const json = await res.json();
+    if (!res.ok) return textResult(`read_file failed: ${json.error ?? `HTTP ${res.status}`}`, true);
+    return textResult(json.content ?? "");
+  } catch (e) {
+    return textResult(`read_file error: ${e instanceof Error ? e.message : String(e)}`, true);
+  }
+}
+
 let cleaningUp = false;
 async function cleanupAll() {
   if (cleaningUp) return; cleaningUp = true;
@@ -145,6 +194,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
   if (name === "provision") return provision(args ?? {});
   if (name === "execute") return execute(args ?? {});
+  if (name === "read_file") return readFile(args ?? {});
   return textResult(`unknown tool: ${name}`, true);
 });
 
