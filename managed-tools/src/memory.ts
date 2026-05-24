@@ -196,6 +196,95 @@ export interface MemoryToolResult {
 }
 
 // ---------------------------------------------------------------------------
+// Secret scrubbing
+//
+// Memory is durable: whatever the agent writes here is persisted forever and
+// re-loaded into every future session's prompt. If a secret leaks into a
+// "lesson" (e.g. the agent pastes a curl command with a real token), it must
+// never reach the store. scrubSecrets() runs on the memory body in
+// callSaveMemory before it's sent over the wire.
+//
+// Design: conservative-but-correct. We over-redact a real secret rather than
+// risk persisting it, but we deliberately do NOT touch plain IDs (UUIDs,
+// short alphanumeric server_ids) — those are useful and not sensitive. The
+// generic high-entropy fallback is therefore scoped to >=32-char base64/hex
+// runs, which UUIDs (36 chars but hyphen-segmented into <=12-char hex groups)
+// don't match.
+//
+// NOTE: if you change these patterns, mirror them in
+// harnesses/opencode/memory-mcp.mjs (that harness self-contains a copy
+// because its .mjs runs under plain node with no TS build step).
+// ---------------------------------------------------------------------------
+
+const REDACTED = "[REDACTED]";
+
+// Each entry redacts a known secret shape. Order matters only for overlap;
+// /g so every occurrence in a multi-line memory body is caught.
+const SECRET_PATTERNS: RegExp[] = [
+  // PEM private key blocks (any label: RSA, EC, OPENSSH, PRIVATE KEY, ...).
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  // OpenAI / Anthropic keys: sk-, sk-ant-, sk-proj-, etc. (token chars after sk-).
+  /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+  // Slack tokens: xoxb-, xoxp-, xoxa-, xoxr-, xapp-.
+  /\bxox[baprs]-[A-Za-z0-9-]{8,}\b/g,
+  /\bxapp-[A-Za-z0-9-]{8,}\b/g,
+  // GitHub tokens: ghp_, gho_, ghs_, ghu_, ghr_, and fine-grained github_pat_.
+  /\bgh[poseur]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  // Render API keys.
+  /\brnd_[A-Za-z0-9]{20,}\b/g,
+  // E2B API keys.
+  /\be2b_[A-Za-z0-9]{16,}\b/g,
+  // AWS access key IDs.
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  // Bearer tokens in an Authorization-style context.
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/g,
+  // Generic `name = value` / `name: value` secret assignments. Captures the
+  // key portion so we keep the field name but redact the value. Matches keys
+  // containing secret/password/passwd/pwd/token/api[_-]?key/access[_-]?key/
+  // private[_-]?key/client[_-]?secret/auth.
+  /\b([A-Za-z0-9_.-]*(?:secret|password|passwd|pwd|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)[A-Za-z0-9_.-]*)\s*[:=]\s*["']?[^\s"']{6,}["']?/gi,
+];
+
+// Long high-entropy fallback: a >=32-char run of base64/hex chars with no
+// hyphens. Catches raw tokens that don't match a known prefix. Excludes
+// hyphens so UUIDs (8-4-4-4-12) and other hyphenated IDs are preserved.
+const HIGH_ENTROPY = /\b[A-Za-z0-9+/=_]{32,}\b/g;
+
+// A bare >=32-char alnum run could in theory be a long opaque ID. To avoid
+// nuking such IDs we only redact when the run shows entropy typical of a
+// secret: it must contain at least one of each of lower, upper, and digit, OR
+// be a long base64-looking string (contains +, /, or =). Pure-lowercase or
+// pure-hex-looking runs that are all one case are left alone if they read like
+// an identifier — but a mixed-case 32+ run is almost never a human ID.
+function looksHighEntropy(s: string): boolean {
+  if (/[+/=]/.test(s)) return true; // base64 padding/url chars -> token
+  const hasLower = /[a-z]/.test(s);
+  const hasUpper = /[A-Z]/.test(s);
+  const hasDigit = /[0-9]/.test(s);
+  return hasLower && hasUpper && hasDigit;
+}
+
+/**
+ * Redact secrets from free text before it's persisted to durable memory.
+ * Replaces every recognized secret with `[REDACTED]`. Plain IDs (UUIDs,
+ * short alphanumeric IDs) are intentionally preserved.
+ */
+export function scrubSecrets(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const re of SECRET_PATTERNS) {
+    out = out.replace(re, (match, key) =>
+      // The generic assignment pattern has a captured key group — keep the
+      // key, redact the value. All other patterns redact the whole match.
+      typeof key === "string" ? `${key}=${REDACTED}` : REDACTED,
+    );
+  }
+  out = out.replace(HIGH_ENTROPY, (m) => (looksHighEntropy(m) ? REDACTED : m));
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Handlers — pure async functions, harness-agnostic
 // ---------------------------------------------------------------------------
 
@@ -205,7 +294,7 @@ export async function callSaveMemory(
   extra: { source_session_id?: string } = {},
 ): Promise<MemoryToolResult> {
   const res = await callApi(env, "POST", memoryUrl(env), {
-    text: input.text,
+    text: scrubSecrets(input.text),
     tags: input.tags ?? [],
     type: input.type,
     priority: input.priority,
