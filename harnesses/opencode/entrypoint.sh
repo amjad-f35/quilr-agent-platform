@@ -35,7 +35,8 @@ fi
 # `opencode serve` parks forever on the first "ask" prompt with no UI to approve
 # it (opencode#16367). bash + edit are denied so the agent does its work in the
 # E2B sandbox (provision/execute) and through MCP tools, not on the shared
-# harness host.
+# harness host. question is denied too — this agent runs autonomously and must
+# not block waiting on a human to answer.
 #
 # Register every Claude model the gateway serves, not just the boot default, so
 # the per-agent model the LAP selects "just works" — opencode rejects any model
@@ -98,6 +99,7 @@ ${MCP_BLOCK}
   "permission": {
     "edit": "deny",
     "bash": "deny",
+    "question": "deny",
     "webfetch": "allow",
     "doom_loop": "allow",
     "external_directory": "allow"
