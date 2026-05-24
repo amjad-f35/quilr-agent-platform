@@ -41,8 +41,11 @@ WORKDIR /work
 COPY harnesses/_shared/entrypoint-common.sh /opt/lap/common.sh
 RUN chmod +x /opt/lap/common.sh
 
-# Sandbox provision/execute MCP server, the MCP-config generator, + node_modules.
+# Sandbox provision/execute MCP server, the LAP memory MCP server, the
+# MCP-config generator, + node_modules (shared package.json installs deps for
+# both .mjs servers).
 COPY --chown=sandbox:sandbox harnesses/opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
+COPY --chown=sandbox:sandbox harnesses/opencode/memory-mcp.mjs /opt/lap/opencode-sandbox-mcp/memory-mcp.mjs
 COPY --chown=sandbox:sandbox harnesses/opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
 COPY --chown=sandbox:sandbox harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
