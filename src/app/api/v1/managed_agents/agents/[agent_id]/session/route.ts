@@ -777,15 +777,15 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
       sandboxes: null,
     });
 
-    if (body.initial_prompt) {
-      void harnessSendMessage({
-        sandbox_url: inlineUrl,
+    if (body.initial_prompt || (body.initial_attachments && body.initial_attachments.length > 0)) {
+      void runInitialPrompt(
+        agent,
+        session.session_id,
+        inlineUrl,
         harness_session_id,
-        model: agent.model,
-        parts: prependAgentSystemPrompt(agent.prompt, expandMessage(body.initial_prompt), session.session_id),
-      }).catch((err: unknown) => {
-        console.error(`brain-inline initial_prompt failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+        body.initial_prompt ?? "",
+        body.initial_attachments,
+      );
     }
 
     const updatedSession = await prisma.session.findUniqueOrThrow({ where: { session_id: session.session_id } });
