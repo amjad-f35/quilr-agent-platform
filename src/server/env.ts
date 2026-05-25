@@ -81,7 +81,11 @@ const EnvSchema = z.object({
   EXECUTOR_SECRET: z.string().min(16).optional(),
   E2B_API_KEY: z.string().min(1).optional(),
   E2B_TEMPLATE: z.string().min(1).default("krrishdholakia/litellm-4gb"),
-  SANDBOX_CHOICE: z.enum(["e2b"]).optional(),
+  DAYTONA_API_KEY: z.string().min(1).optional(),
+  DAYTONA_API_URL: z.string().url().optional(),
+  DAYTONA_SNAPSHOT: z.string().min(1).optional(),
+  DAYTONA_IMAGE: z.string().min(1).optional(),
+  SANDBOX_CHOICE: z.enum(["e2b", "daytona"]).optional(),
   VAULT_URL: z.string().url().optional(),
   VAULT_PROXY_TOKEN: z.string().min(1).optional(),
   VAULT_CA_CRT: z.string().min(1).optional(),
@@ -108,6 +112,20 @@ const EnvSchema = z.object({
   // Set both vars to enable; omit either to disable.
   WARM_POOL_PRIORITY_AGENT_ID: z.string().optional(),
   WARM_POOL_PRIORITY_SIZE: z.coerce.number().int().positive().default(1),
+
+  // S3 artifact storage — optional. When ARTIFACT_STORAGE="s3" and
+  // AWS_S3_BUCKET is set, harness pods can POST file uploads to
+  // /api/v1/managed_agents/sessions/{id}/artifacts and receive a 7-day
+  // presigned URL back. Unset on existing deployments → the artifact
+  // route returns 503 and the rest of the platform boots unchanged.
+  ARTIFACT_STORAGE: z.enum(["s3"]).optional(),
+  AWS_S3_BUCKET: z.string().min(1).optional(),
+  AWS_REGION: z.string().min(1).default("us-east-1"),
+  // Custom S3 endpoint for S3-compatible providers (e.g. Cloudflare R2:
+  // https://<account_id>.r2.cloudflarestorage.com). Unset → real AWS S3.
+  // Use AWS_REGION="auto" with R2. Credentials come from the standard
+  // AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env (R2 issues these).
+  AWS_S3_ENDPOINT: z.string().url().optional(),
 });
 
 function collectContainerEnvPassthrough(

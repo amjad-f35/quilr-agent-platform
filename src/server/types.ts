@@ -741,6 +741,13 @@ export interface ApiDockerfile {
 export interface HarnessMessagePart {
   type: string;
   text?: string;
+  artifact?: {
+    id: string;
+    name: string;
+    mime_type: string;
+    size: number;
+    url: string;
+  };
   [key: string]: unknown;
 }
 
@@ -843,7 +850,11 @@ export interface ServerEnv {
   EXECUTOR_SECRET?: string;
   E2B_API_KEY?: string;
   E2B_TEMPLATE: string;
-  SANDBOX_CHOICE?: "e2b";
+  DAYTONA_API_KEY?: string;
+  DAYTONA_API_URL?: string;
+  DAYTONA_SNAPSHOT?: string;
+  DAYTONA_IMAGE?: string;
+  SANDBOX_CHOICE?: "e2b" | "daytona";
   VAULT_URL?: string;
   VAULT_PROXY_TOKEN?: string;
   VAULT_CA_CRT?: string;
@@ -858,6 +869,14 @@ export interface ServerEnv {
   WARM_POOL_RECENT_AGENT_HOURS: number; // default 24
   WARM_POOL_PRIORITY_AGENT_ID?: string;
   WARM_POOL_PRIORITY_SIZE: number; // default 1
+  // S3 artifact storage — optional. When ARTIFACT_STORAGE="s3" and
+  // AWS_S3_BUCKET is set, the /artifacts route is live; otherwise it
+  // returns 503 and the platform boots unchanged.
+  ARTIFACT_STORAGE?: "s3";
+  AWS_S3_BUCKET?: string;
+  AWS_REGION: string;
+  // Custom S3 endpoint for S3-compatible providers (e.g. Cloudflare R2).
+  AWS_S3_ENDPOINT?: string;
 
   /**
    * All process.env entries whose key starts with `CONTAINER_ENV_`, with

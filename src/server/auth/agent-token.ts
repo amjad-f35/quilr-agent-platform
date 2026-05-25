@@ -6,7 +6,7 @@
  * Each pod now gets:
  *
  *   - an `access` token (15min TTL, scoped to a single agent + one or more
- *     route classes — currently just "memory")
+ *     route classes — see `AgentScope` for the current set)
  *   - a `refresh` token (lifetime = pod max idle TTL, used only by the
  *     /api/v1/agent-auth/refresh endpoint to mint a fresh access token)
  *
@@ -43,7 +43,17 @@ const ACCESS_TOKEN_TTL_SEC = 15 * 60;
 // reaper plus a generous slack. When the pod dies the token is moot.
 const REFRESH_TOKEN_TTL_SEC = 24 * 60 * 60;
 
-export type AgentScope = "memory" | "automations" | "skills" | "issues";
+// Scopes we currently mint. "artifacts" is the most recent addition for
+// the S3 artifact upload route. Keep this list synchronised with the
+// scopes minted in k8s.ts at pod-spawn time — adding a route that asserts
+// a scope not present on existing pod tokens silently 401s every harness
+// until a session is restarted.
+export type AgentScope =
+  | "memory"
+  | "automations"
+  | "skills"
+  | "issues"
+  | "artifacts";
 
 interface BaseClaims {
   /** "access" — a regular bearer that authorizes requests under `scope`. */

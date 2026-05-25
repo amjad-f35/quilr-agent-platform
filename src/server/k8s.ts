@@ -596,7 +596,11 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
     // scope set so /agent-auth/refresh can re-derive the grant without a
     // hardcoded default. Widening this list is the only place to edit when
     // new agent scopes are added.
-    const agentScopes: AgentScope[] = ["memory", "automations", "skills", "issues"];
+    // Always include "artifacts" so harness pods can reach the upload
+    // route when S3 is configured. The route itself returns 503 when
+    // ARTIFACT_STORAGE is unset, so having the scope on the token is
+    // harmless for deployments that don't configure S3.
+    const agentScopes: AgentScope[] = ["memory", "automations", "skills", "issues", "artifacts"];
     out.push({
       name: "REAL_LAP_ACCESS_TOKEN",
       value: mintAgentAccessToken({
