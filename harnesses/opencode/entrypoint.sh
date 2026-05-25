@@ -125,6 +125,44 @@ ${AGENT_PROMPT:-}${MCP_NOTE}
 EOF2
 fi
 
+# Hydrate attached skills as ~/.claude/skills/<slug>/SKILL.md so opencode's
+# native skill loader discovers them on boot (~/.claude/skills is one of
+# opencode's global skill paths) and exposes them through the `skill` tool —
+# instead of skills only reaching the agent inlined into AGENT_PROMPT as raw
+# text. The platform builds SKILLS_JSON in
+# src/server/k8s.ts:buildSkillsJsonForAgent (slug already matches the SKILL.md
+# frontmatter `name:`). Empty/unset = no-op (most agents). Failure must not
+# block the harness.
+if [ -n "${SKILLS_JSON:-}" ]; then
+  mkdir -p "$HOME/.claude/skills"
+  printf '%s' "$SKILLS_JSON" | node -e '
+    let raw = "";
+    process.stdin.on("data", c => raw += c);
+    process.stdin.on("end", () => {
+      try {
+        const skills = JSON.parse(raw);
+        const fs = require("fs"), path = require("path");
+        const root = path.join(process.env.HOME, ".claude", "skills");
+        for (const { slug, content } of skills) {
+          if (!slug || typeof content !== "string") continue;
+          // Reject anything that is not a plain slug so a crafted name cant
+          // escape the skills dir via path traversal.
+          if (!/^[a-z0-9._-]+$/i.test(slug)) {
+            console.error("[entrypoint] WARNING: skipping skill with invalid slug:", JSON.stringify(slug));
+            continue;
+          }
+          const dir = path.join(root, slug);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, "SKILL.md"), content);
+        }
+        console.log("[entrypoint] hydrated " + skills.length + " skill(s)");
+      } catch (e) {
+        console.error("[entrypoint] WARNING: SKILLS_JSON parse failed:", e.message);
+      }
+    });
+  ' || echo "[entrypoint] WARNING: skill hydration failed; continuing"
+fi
+
 echo "[entrypoint] booting opencode serve on 0.0.0.0:${PORT}"
 echo "[entrypoint] base=${BASE} model=${LITELLM_DEFAULT_MODEL} repo=${REPO_DIR}"
 
