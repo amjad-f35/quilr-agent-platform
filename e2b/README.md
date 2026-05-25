@@ -12,6 +12,7 @@ uses when it spins up a sandbox.
 - **Pre-cloned repos** (no per-session clone):
   - `https://github.com/BerriAI/litellm` → `/home/user/litellm`
   - `https://github.com/BerriAI/litellm-docs` → `/home/user/litellm-docs`
+  - `https://github.com/BerriAI/litellm-agent-platform` → `/home/user/litellm-agent-platform`
 - **All `litellm[proxy]` deps pre-installed** — no per-session install wait.
 - **Global pip.conf** always points at `https://pypi.org/simple` with the combined CA cert — no `--trusted-host` / `--index-url` flags ever needed.
 - **`uv` pre-installed** via pip (not the curl/astral installer) so `uv_build` resolves cleanly.
