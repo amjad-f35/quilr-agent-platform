@@ -1,0 +1,8 @@
+# Minimal dev config for the litellm-4gb e2b template.
+# Models are managed in the DB (STORE_MODEL_IN_DB=True); start empty and add via
+# the UI / API. Master key comes from LITELLM_MASTER_KEY (sk-1234 in this image).
+model_list: []
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+litellm_settings:
+  drop_params: true
