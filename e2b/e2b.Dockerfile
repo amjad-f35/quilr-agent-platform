@@ -108,3 +108,8 @@ COPY dev-up.sh /usr/local/bin/dev-up
 RUN chmod +x /usr/local/bin/start-db /usr/local/bin/dev-up
 
 RUN chown -R user:user /home/user/litellm /home/user/litellm-docs
+
+# Drop back to `user` (we switched to root on line 12). The sandbox runs as
+# `user`, and postgres' pg_ctl refuses to run as root — so the start_cmd needs
+# this to be the image's default user.
+USER user
