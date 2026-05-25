@@ -1,3 +1,4 @@
+import { wrap } from "@/server/route-helpers";
 import { createArtifact } from "@/server/artifacts";
 import { prisma } from "@/server/db";
 import { assertAgentTokenOrMaster } from "@/server/auth";
@@ -11,69 +12,51 @@ export const dynamic = "force-dynamic";
 const CreateArtifactSchema = z.object({
   name: z.string().min(1).max(255),
   mime_type: z.string().min(1),
-  content: z.string().min(1).max(100 * 1024 * 1024),  // base64, max 100MB
+  // base64-encoded bytes; actual decoded-size cap (100 MB) enforced in createArtifact
+  content: z.string().min(1).max(140 * 1024 * 1024),
   size: z.number().int().min(1).max(100 * 1024 * 1024),
 });
 
-export async function POST(
-  req: Request,
-  { params }: { params: { session_id: string } },
-) {
-  try {
-    // Check if artifact storage is configured
-    if (!env.ARTIFACT_STORAGE || !env.AWS_S3_BUCKET) {
-      throw new HttpError(503, "artifact storage not configured");
-    }
-
-    // Verify agent token or master key
-    assertAgentTokenOrMaster(req, { scope: "artifacts", session_id: params.session_id });
-
-    // Verify session exists and is valid
-    const session = await prisma.session.findUnique({
-      where: { session_id: params.session_id },
-      select: { session_id: true, status: true },
-    });
-
-    if (!session) {
-      throw new HttpError(404, "session not found");
-    }
-
-    if (session.status !== "ready") {
-      throw new HttpError(400, "session not in ready state");
-    }
-
-    const body = await req.json();
-    const { name, mime_type, content, size } = CreateArtifactSchema.parse(body);
-
-    // Additional validation: verify actual content size matches declared size
-    const actualSize = Math.ceil((content.length * 3) / 4);  // base64 decode estimate
-    if (Math.abs(actualSize - size) > 100) {
-      // Allow 100 byte tolerance for rounding
-      throw new HttpError(400, "content size does not match declared size");
-    }
-
-    const artifact = await createArtifact({
-      session_id: params.session_id,
-      name,
-      mime_type,
-      content,
-      size,
-    });
-
-    return Response.json(artifact);
-  } catch (error) {
-    if (error instanceof HttpError) {
-      return Response.json({ error: error.detail }, { status: error.status });
-    }
-
-    if (error instanceof z.ZodError) {
-      return Response.json(
-        { error: "invalid request", details: error.issues },
-        { status: 400 },
-      );
-    }
-
-    console.error("Failed to create artifact:", error);
-    return Response.json({ error: "internal server error" }, { status: 500 });
-  }
+interface RouteContext {
+  params: Promise<{ session_id: string }>;
 }
+
+export const POST = wrap<RouteContext>(async (req, ctx) => {
+  const { session_id } = await ctx.params;
+
+  if (!env.ARTIFACT_STORAGE || !env.AWS_S3_BUCKET) {
+    throw new HttpError(503, "artifact storage not configured");
+  }
+
+  // Look up session first to get agent_id — required for assertAgentTokenOrMaster.
+  const session = await prisma.session.findUnique({
+    where: { session_id },
+    select: { agent_id: true, status: true },
+  });
+
+  if (!session) {
+    throw new HttpError(404, "session not found");
+  }
+
+  // Auth after session lookup so we can pass the correct agent_id. A scoped
+  // agent token must carry scope="artifacts" and match the session's agent_id;
+  // the master key is also accepted for UI/CLI callers.
+  assertAgentTokenOrMaster(req, { scope: "artifacts", agent_id: session.agent_id });
+
+  if (session.status !== "ready") {
+    throw new HttpError(400, "session not in ready state");
+  }
+
+  const body = await req.json();
+  const { name, mime_type, content, size } = CreateArtifactSchema.parse(body);
+
+  const artifact = await createArtifact({
+    session_id,
+    name,
+    mime_type,
+    content,
+    size,
+  });
+
+  return Response.json(artifact);
+});
