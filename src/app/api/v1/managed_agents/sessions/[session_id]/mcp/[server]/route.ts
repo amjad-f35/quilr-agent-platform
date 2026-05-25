@@ -16,7 +16,7 @@
  * e.g. /sessions/{id}/memory).
  */
 
-import { assertAgentTokenOrMaster } from "@/server/auth";
+import { assertAgentScopeOrMaster } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { httpError, HttpError } from "@/server/types";
@@ -43,33 +43,56 @@ async function sessionAgentAndServers(
   return { agent_id: row.agent.agent_id, serverIds: ids };
 }
 
-/**
- * True if `serverName` (an alias/name) maps to one of the agent's attached
- * server ids. Looks the name up in the gateway's server list — the same source
- * resolveAgentMcpServers used to build the spec — so the allow-list is by id,
- * not by a spoofable name.
- */
-async function agentAllowsServer(serverName: string, serverIds: string[]): Promise<boolean> {
-  if (serverIds.length === 0) return false;
+type GatewayServer = { server_id: string; server_name: string; alias?: string };
+
+// The gateway's server list (id<->name) changes only when an operator edits
+// agent config, so cache it briefly instead of hitting the gateway on every
+// MCP call (initialize + tools/list + each tools/call). On fetch error we
+// reuse the last good list rather than failing closed.
+let _serverCache: { at: number; servers: GatewayServer[] } | null = null;
+const SERVER_LIST_TTL_MS = 60_000;
+async function gatewayServers(): Promise<GatewayServer[]> {
+  if (_serverCache && Date.now() - _serverCache.at < SERVER_LIST_TTL_MS) return _serverCache.servers;
   const base = env.LITELLM_API_BASE.replace(/\/+$/, "");
-  const res = await fetch(`${base}/v1/mcp/server`, {
-    headers: { Authorization: `Bearer ${env.LITELLM_API_KEY}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) return false;
-  const servers = (await res.json()) as Array<{ server_id: string; server_name: string; alias?: string }>;
+  try {
+    const res = await fetch(`${base}/v1/mcp/server`, {
+      headers: { Authorization: `Bearer ${env.LITELLM_API_KEY}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return _serverCache?.servers ?? [];
+    const servers = (await res.json()) as GatewayServer[];
+    _serverCache = { at: Date.now(), servers };
+    return servers;
+  } catch {
+    return _serverCache?.servers ?? [];
+  }
+}
+
+/** True if `serverName` maps (by id, not spoofable name) to an attached server. */
+function allows(serverName: string, serverIds: string[], servers: GatewayServer[]): boolean {
+  if (serverIds.length === 0) return false;
   const allowed = new Set(serverIds);
   return servers.some((s) => (s.alias || s.server_name) === serverName && allowed.has(s.server_id));
 }
 
 async function broker(req: Request, ctx: RouteContext): Promise<Response> {
   const { session_id, server } = await ctx.params;
+
+  // 1. Authenticate BEFORE any DB access — otherwise an unauthenticated caller
+  //    could probe session existence via 404-vs-401. The token carries agent_id
+  //    as a signed claim; we bind it to the session below.
+  const id = assertAgentScopeOrMaster(req, "mcp");
+
+  // 2. Resolve the session's agent + its attached MCP servers.
   const { agent_id, serverIds } = await sessionAgentAndServers(session_id);
 
-  // Caller must hold this agent's scoped "mcp" token (or the master key).
-  assertAgentTokenOrMaster(req, { scope: "mcp", agent_id });
+  // 3. An agent token must belong to THIS session's agent (master key bypasses).
+  if (id.source === "agent" && id.agent_id !== agent_id) {
+    httpError(403, "token does not match this session's agent");
+  }
 
-  if (!(await agentAllowsServer(server, serverIds))) {
+  // 4. Allow-list by id (cached gateway server list).
+  if (!allows(server, serverIds, await gatewayServers())) {
     httpError(403, `MCP server '${server}' is not attached to this agent`);
   }
 
