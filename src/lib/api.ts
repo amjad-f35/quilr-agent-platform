@@ -293,6 +293,7 @@ export interface SessionAssessmentRow {
   evidence: unknown[];
   action_status: string;
   action_ref: string | null;
+  reviewer_session_id: string | null;
   checked_at: string;
   next_check_at: string | null;
   created_at: string;
