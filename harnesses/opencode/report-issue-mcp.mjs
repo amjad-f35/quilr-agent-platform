@@ -154,23 +154,28 @@ async function callApi(env, method, url, body) {
 // ---------------------------------------------------------------------------
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const _agentIdByName = new Map(); // lowercased name → agent_id
+// lowercased name → { id, expiresAt } — TTL'd so a rename or recreate during
+// the same MCP process lifetime doesn't permanently mis-route issue reports
+// to a stale UUID. Cheap to refresh; the lookup is rare on the happy path
+// (only fires when the agent passes its name instead of its id).
+const AGENT_ID_CACHE_TTL_MS = 5 * 60 * 1000;
+const _agentIdByName = new Map();
 
 async function resolveAgentId(env, idOrName) {
   if (!idOrName) return null;
   if (UUID_RE.test(idOrName)) return idOrName;
   const key = idOrName.toLowerCase();
   const cached = _agentIdByName.get(key);
-  if (cached) return cached;
-  // List all agents and filter client-side. The list is bounded (operator
-  // accounts on LAP, not user-facing) and this call is rare (only when the
-  // agent passes its name instead of its id).
-  const bearer = cachedAccessToken ?? env.access_token;
-  const res = await retryCall("GET", `${env.base_url}/api/v1/managed_agents/agents`, undefined, bearer);
-  if (!res.ok || !Array.isArray(res.data)) return idOrName; // give up; let the API surface the real error
+  if (cached && cached.expiresAt > Date.now()) return cached.id;
+  // List all agents and filter client-side. Routed through `callApi` (not
+  // `retryCall`) so a stale access token gets refreshed transparently — a
+  // 401 here would otherwise leak through as a non-retryable failure and we'd
+  // fall back to the raw name, defeating the whole point of this lookup.
+  const res = await callApi(env, "GET", `${env.base_url}/api/v1/managed_agents/agents`, undefined);
+  if (!res.ok || !Array.isArray(res.data)) return idOrName; // surface the real error downstream
   const hit = res.data.find((a) => (a.name ?? "").toLowerCase() === key);
   if (hit?.id) {
-    _agentIdByName.set(key, hit.id);
+    _agentIdByName.set(key, { id: hit.id, expiresAt: Date.now() + AGENT_ID_CACHE_TTL_MS });
     return hit.id;
   }
   return idOrName;
