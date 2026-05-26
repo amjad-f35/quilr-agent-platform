@@ -19,6 +19,7 @@ import http from "http";
 import { prisma } from "@/server/db";
 import { env } from "@/server/env";
 import { reconcileOrphans } from "@/server/reconcile";
+import { pollSessionsForReview } from "@/server/reviewer";
 import { topUpWarmPool } from "@/server/warmPool";
 import { reconcileAutomationRuns, tickAutomations } from "@/server/automations";
 import { registry } from "@/server/metrics";
@@ -31,6 +32,7 @@ async function tick() {
   let r = { inspected: 0, stopped: 0, failed_creating: 0, idle_killed: 0, warm_orphans_stopped: 0, ghost_killed: 0, warm_stale_killed: 0 };
   let t = { provisioned: 0, recycled: 0, fallback_dead: 0 };
   let a = { claimed: 0, fired: 0, failed: 0 };
+  let reviewer = { inspected: 0, assessed: 0 };
 
   try {
     r = await reconcileOrphans();
@@ -77,6 +79,12 @@ async function tick() {
   const elapsed = Date.now() - tickStart;
   registry.observe("reconcile_duration_seconds", {}, elapsed / 1000);
 
+  try {
+    reviewer = await pollSessionsForReview();
+  } catch (e) {
+    console.error("reviewer tick failed:", e);
+  }
+
   // Heartbeat — emitted every tick so operators can confirm the worker is
   // alive and K8s is reachable without waiting for a non-zero event.
   console.log(
@@ -85,7 +93,9 @@ async function tick() {
     ` failed_creating=${r.failed_creating} idle_killed=${r.idle_killed}` +
     ` ghost_killed=${r.ghost_killed} warm_stale_killed=${r.warm_stale_killed}` +
     ` warm_provisioned=${t.provisioned} warm_recycled=${t.recycled}` +
-    ` automations_fired=${a.fired} automations_failed=${a.failed}`,
+    ` automations_fired=${a.fired} automations_failed=${a.failed}` +
+    ` reviewer_inspected=${reviewer.inspected}` +
+    ` reviewer_assessed=${reviewer.assessed}`,
   );
 }
 
