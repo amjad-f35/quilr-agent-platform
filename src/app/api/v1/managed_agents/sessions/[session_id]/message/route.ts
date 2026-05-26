@@ -297,7 +297,8 @@ export async function POST(req: Request, ctx: RouteContext) {
       parts,
     });
 
-    let response: HarnessMessageResponse;
+    // eslint-disable-next-line prefer-const
+    let response: HarnessMessageResponse | undefined;
     console.log(`[message] session=${session_id} sandbox_url=${cached.sandbox_url} harness_session_id=${cached.harness_session_id}`);
     const hb = startHeartbeat(session_id, cached.sandbox_url, cached.harness_session_id);
     try {
@@ -308,37 +309,68 @@ export async function POST(req: Request, ctx: RouteContext) {
         parts,
       });
     } catch (err) {
-      if (isHardConnectFailure(err) || isDeadSessionError(err)) {
-        // Dead sandbox — try transparent recovery before giving up.
+      // Network-level failure (harness mid-restart): wait briefly and retry
+      // once before falling through to full recovery. This handles the window
+      // where the inline harness process has restarted but hasn't bound its
+      // listener yet — a single 3 s pause is usually enough to bridge it.
+      let retryErr: unknown = err;
+      if (err instanceof TypeError && err.message.includes("fetch")) {
         console.warn(
-          `session ${session_id} sandbox_url=${cached.sandbox_url} sandbox unreachable; attempting auto-recovery`,
+          `session ${session_id} fetch failed (harness may be restarting); retrying in 3 s`,
         );
+        await new Promise<void>((r) => setTimeout(r, 3000));
         try {
-          const recovered = await recoverAndResend({
-            session_id,
-            user_message_id: userMsg?.message_id ?? null,
+          response = await harnessSendMessage({
+            sandbox_url: cached.sandbox_url,
+            harness_session_id: cached.harness_session_id,
+            model: cached.agent_model,
             parts,
           });
-          return Response.json(recovered);
-        } catch (recoveryErr) {
-          console.error(
-            `auto-recovery failed for session ${session_id}:`,
-            recoveryErr,
-          );
-          await markSessionDead(session_id);
-          throw new HttpError(502, "harness request failed");
+          retryErr = null;
+        } catch (retryError) {
+          retryErr = retryError;
         }
       }
-      // Non-connect failure (harness 4xx/5xx): the sandbox is reachable but the
-      // turn errored and won't be retried here, so flag it `failed` (excluded
-      // from replay) rather than leaving a phantom unanswered user turn that a
-      // later restart would replay. Surface a 502.
-      console.error("harness send_message failed", err);
-      if (userMsg) void markUserMessageFailed(userMsg.message_id);
-      throw new HttpError(502, "harness request failed");
+
+      if (retryErr !== null) {
+        if (isHardConnectFailure(retryErr) || isDeadSessionError(retryErr) ||
+            (retryErr instanceof TypeError && (retryErr as TypeError).message.includes("fetch"))) {
+          // Dead or still-restarting sandbox — try transparent recovery before giving up.
+          console.warn(
+            `session ${session_id} sandbox_url=${cached.sandbox_url} sandbox unreachable; attempting auto-recovery`,
+          );
+          try {
+            const recovered = await recoverAndResend({
+              session_id,
+              user_message_id: userMsg?.message_id ?? null,
+              parts,
+            });
+            await prisma.session.update({
+              where: { session_id },
+              data: { failure_reason: null },
+            }).catch(() => {});
+            return Response.json(recovered);
+          } catch (recoveryErr) {
+            console.error(
+              `auto-recovery failed for session ${session_id}:`,
+              recoveryErr,
+            );
+            await markSessionDead(session_id);
+            throw new HttpError(502, "harness request failed");
+          }
+        }
+        // Non-connect failure (harness 4xx/5xx): the sandbox is reachable but the
+        // turn errored and won't be retried here, so flag it `failed` (excluded
+        // from replay) rather than leaving a phantom unanswered user turn that a
+        // later restart would replay. Surface a 502.
+        console.error("harness send_message failed", retryErr);
+        if (userMsg) void markUserMessageFailed(userMsg.message_id);
+        throw new HttpError(502, "harness request failed");
+      }
     } finally {
       clearInterval(hb);
     }
+    if (!response) throw new HttpError(502, "harness request failed");
 
     markSessionSeen(session_id);
     persistTurn({
