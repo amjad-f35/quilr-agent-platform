@@ -50,12 +50,12 @@ const server = new Server({ name: "opencode-sandbox", version: "1.0.0" }, { capa
 const TOOLS = [
   {
     name: "provision",
-    description: "Provision a new sandbox environment. Returns a confirmation message when the sandbox is ready. Always pass session_id from <lap_session_id> in your context so the platform can inject your agent's env vars (e.g. GITHUB_TOKEN) into the sandbox.",
+    description: "Provision a new sandbox environment. Returns a confirmation message when the sandbox is ready. IMPORTANT: always pass session_id so the platform injects your agent's env vars (e.g. GITHUB_TOKEN) into the sandbox. Find the session_id as the UUID text content of the <lap_session_id> tag in your conversation context (e.g. if context contains '<lap_session_id>abc-123</lap_session_id>' then session_id is 'abc-123').",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Label for the sandbox — used in subsequent execute() calls as sandbox_name. Use 'main' if unsure." },
-        session_id: { type: "string", description: "LAP session ID from <lap_session_id> in your context — required for agent env vars to be available in the sandbox." },
+        session_id: { type: "string", description: "The UUID from the <lap_session_id> tag in your context. Do NOT use a variable like ${LAP_SESSION_ID} — copy the actual UUID string value." },
       },
       required: ["name"],
     },
