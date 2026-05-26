@@ -123,7 +123,7 @@ export function prependAgentSystemPrompt(
   // base URL, in which case we fall back to the id line only.
   const sessionUrl = session_id ? buildSessionUrl(session_id) : null;
   const sessionLine = session_id
-    ? `<lap_session_id>${session_id}</lap_session_id>\n` +
+    ? `[SYSTEM: Your LAP session_id is ${session_id} — pass this exact string when calling sandbox_provision]\n` +
       (sessionUrl ? `<lap_session_url>${sessionUrl}</lap_session_url>\n` : "")
     : "";
   if (!trimmed && !sessionLine) return parts;
