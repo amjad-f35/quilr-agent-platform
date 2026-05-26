@@ -274,6 +274,32 @@ export interface SessionOrigin {
   url: string | null;
 }
 
+export type SessionAssessmentState =
+  | "on_track"
+  | "slow_but_ok"
+  | "off_track"
+  | "blocked"
+  | "failed"
+  | string;
+
+export interface SessionAssessmentRow {
+  id: string;
+  session_id: string;
+  state: SessionAssessmentState;
+  severity: "info" | "med" | "high" | string;
+  blocker_type: string | null;
+  diagnosis: string;
+  recommended_action: string | null;
+  confidence: number;
+  evidence: unknown[];
+  action_status: string;
+  action_ref: string | null;
+  checked_at: string;
+  next_check_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Shape returned by the harness when we POST a message. Stored on
  * `SessionRow.response` after a `POST /agents/{id}/session` with an
@@ -834,6 +860,30 @@ export function getSession(id: string): Promise<SessionRow> {
   return api<SessionRow>(
     "GET",
     `/v1/managed_agents/sessions/${encodeURIComponent(id)}`,
+  );
+}
+
+export function getSessionAssessment(
+  id: string,
+  init?: ApiInit,
+): Promise<SessionAssessmentRow | null> {
+  return api<SessionAssessmentRow | null>(
+    "GET",
+    `/v1/managed_agents/sessions/${encodeURIComponent(id)}/assessment`,
+    undefined,
+    init,
+  );
+}
+
+export function checkSessionAssessment(
+  id: string,
+  init?: ApiInit,
+): Promise<SessionAssessmentRow> {
+  return api<SessionAssessmentRow>(
+    "POST",
+    `/v1/managed_agents/sessions/${encodeURIComponent(id)}/assessment`,
+    undefined,
+    init,
   );
 }
 
