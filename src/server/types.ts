@@ -847,6 +847,8 @@ export interface ServerEnv {
   DAYTONA_API_URL?: string;
   DAYTONA_SNAPSHOT?: string;
   DAYTONA_IMAGE?: string;
+  DAYTONA_MEMORY_GIB?: number;
+  DAYTONA_CPU?: number;
   SANDBOX_CHOICE?: "e2b" | "daytona";
   VAULT_URL?: string;
   VAULT_PROXY_TOKEN?: string;

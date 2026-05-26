@@ -15,6 +15,8 @@ export class DaytonaProvider extends SandboxProvider {
     apiUrl: string | undefined,
     private readonly snapshot: string | undefined,
     private readonly image: string | undefined,
+    private readonly memoryGib: number | undefined,
+    private readonly cpu: number | undefined,
   ) {
     super();
     this.daytona = new Daytona({
@@ -65,16 +67,21 @@ export class DaytonaProvider extends SandboxProvider {
 
     const envVars = { ...stubEnv, ...proxyEnv, ...vaultCaEnv };
 
+    const resources =
+      this.memoryGib || this.cpu
+        ? { ...(this.memoryGib ? { memory: this.memoryGib } : {}), ...(this.cpu ? { cpu: this.cpu } : {}) }
+        : undefined;
+
     // autoStopInterval: 0 disables the 15-min idle kill — critical for long agent runs.
     let sandbox;
     if (this.image) {
       sandbox = await this.daytona.create(
-        { image: this.image, envVars, autoStopInterval: 0 },
+        { image: this.image, envVars, autoStopInterval: 0, ...(resources ? { resources } : {}) },
         { timeout: 120 },
       );
     } else {
       sandbox = await this.daytona.create(
-        { snapshot: this.snapshot, envVars, autoStopInterval: 0 },
+        { snapshot: this.snapshot, envVars, autoStopInterval: 0, ...(resources ? { resources } : {}) },
         { timeout: 120 },
       );
     }

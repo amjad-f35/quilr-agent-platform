@@ -22,6 +22,8 @@ const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
 const DAYTONA_API_URL = process.env.DAYTONA_API_URL;
 const DAYTONA_SNAPSHOT = process.env.DAYTONA_SNAPSHOT;
 const DAYTONA_IMAGE = process.env.DAYTONA_IMAGE;
+const DAYTONA_MEMORY_GIB = process.env.DAYTONA_MEMORY_GIB ? Number(process.env.DAYTONA_MEMORY_GIB) : undefined;
+const DAYTONA_CPU = process.env.DAYTONA_CPU ? Number(process.env.DAYTONA_CPU) : undefined;
 const USE_DAYTONA = SANDBOX_CHOICE === "daytona" && !!DAYTONA_API_KEY;
 // E2B auto-shuts a sandbox this long after its shutdown timer was last set. We
 // reset that timer on every execute/read (keepalive, see below), so in practice
@@ -136,10 +138,14 @@ async function provision({ name, project_id }) {
       try {
         const proxyUrl = buildProxyUrl();
         const envVars = proxyUrl ? { HTTPS_PROXY: proxyUrl, HTTP_PROXY: proxyUrl } : {};
+        const resources = (DAYTONA_MEMORY_GIB || DAYTONA_CPU)
+          ? { ...(DAYTONA_MEMORY_GIB ? { memory: DAYTONA_MEMORY_GIB } : {}), ...(DAYTONA_CPU ? { cpu: DAYTONA_CPU } : {}) }
+          : undefined;
         const daytona = await getDaytona();
+        const base = { envVars, autoStopInterval: 0, ...(resources ? { resources } : {}) };
         const sandbox = DAYTONA_IMAGE
-          ? await daytona.create({ image: DAYTONA_IMAGE, envVars, autoStopInterval: 0 }, { timeout: 120 })
-          : await daytona.create({ snapshot: DAYTONA_SNAPSHOT, envVars, autoStopInterval: 0 }, { timeout: 120 });
+          ? await daytona.create({ ...base, image: DAYTONA_IMAGE }, { timeout: 120 })
+          : await daytona.create({ ...base, snapshot: DAYTONA_SNAPSHOT }, { timeout: 120 });
         sandboxes.set(name, sandbox);
         console.error(`[sandbox-mcp] provisioned daytona: ${sandbox.id}`);
         return textResult(`sandbox "${name}" ready (id: \`${sandbox.id}\`, provider: daytona)`);

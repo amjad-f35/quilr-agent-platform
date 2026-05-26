@@ -14,6 +14,8 @@ function buildRegistry(): Record<string, SandboxProvider> {
       env.DAYTONA_API_URL,
       env.DAYTONA_SNAPSHOT,
       env.DAYTONA_IMAGE,
+      env.DAYTONA_MEMORY_GIB,
+      env.DAYTONA_CPU,
     ),
   };
 }

@@ -49,6 +49,8 @@ if (hasSandboxCreds) {
       ...(process.env.DAYTONA_API_URL && { DAYTONA_API_URL: process.env.DAYTONA_API_URL }),
       ...(process.env.DAYTONA_SNAPSHOT && { DAYTONA_SNAPSHOT: process.env.DAYTONA_SNAPSHOT }),
       ...(process.env.DAYTONA_IMAGE && { DAYTONA_IMAGE: process.env.DAYTONA_IMAGE }),
+      ...(process.env.DAYTONA_MEMORY_GIB && { DAYTONA_MEMORY_GIB: process.env.DAYTONA_MEMORY_GIB }),
+      ...(process.env.DAYTONA_CPU && { DAYTONA_CPU: process.env.DAYTONA_CPU }),
     },
   };
 }
