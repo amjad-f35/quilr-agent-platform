@@ -9,6 +9,17 @@
 import { fetch } from "undici";
 
 import { buildSessionUrl } from "./sessionUrl";
+
+// Bearer token the inline harness (lite-harness) gates its API on. When the
+// env var is unset, the harness runs open and we send no header. Single source
+// of truth so every fetch in this module agrees.
+function harnessAuthHeaders(): Record<string, string> {
+  const token =
+    process.env.HARNESS_AUTH_TOKEN?.trim() ||
+    process.env.CONTAINER_ENV_HARNESS_AUTH_TOKEN?.trim() ||
+    "";
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
 import type {
   HarnessCreateSessionOpts,
   HarnessMessage,
@@ -193,7 +204,7 @@ async function postJson(
 ): Promise<unknown> {
   const res = await fetchWithRetry(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...harnessAuthHeaders() },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeout_ms),
   });
@@ -357,7 +368,7 @@ export async function harnessPromptAsync(
   const url = `${sandbox_url}/session/${harness_session_id}/prompt_async`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...harnessAuthHeaders() },
     body: JSON.stringify({
       model: { providerID: "litellm", modelID: model },
       parts,
@@ -399,6 +410,7 @@ export async function harnessDeleteSession(opts: {
   const url = `${sandbox_url}/session/${harness_session_id}`;
   const res = await fetch(url, {
     method: "DELETE",
+    headers: harnessAuthHeaders(),
     signal: AbortSignal.timeout(5_000),
   });
   if (!res.ok && res.status !== 404) {
@@ -415,7 +427,7 @@ export async function harnessAbort(opts: {
   const url = `${sandbox_url}/session/${harness_session_id}/abort`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...harnessAuthHeaders() },
     body: "{}",
     signal: AbortSignal.timeout(5_000),
   });
@@ -433,7 +445,7 @@ export async function harnessOpenEventStream(opts: {
   const url = `${sandbox_url}/event`;
   const res = await fetch(url, {
     method: "GET",
-    headers: { accept: "text/event-stream" },
+    headers: { accept: "text/event-stream", ...harnessAuthHeaders() },
     signal,
   });
   if (!res.ok) {
