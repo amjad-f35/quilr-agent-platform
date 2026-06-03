@@ -2,7 +2,13 @@
 
 LiteLLM Agent Platform lets anyone run a harness (Claude Code, Codex, Hermes) as a service. They select a harness, tools, and a system prompt, deploy it, and can start running and managing agents.
 
-You can get agents using Claude Code, Hermes, and OpenCode with session management, planning and execution, feedback, memory, MCP tools, and CRON schedules.
+ 
+LiteLLM Agent Platform manages:
+ 
+- **Unified interface for harnesses** - swap between Claude Code, Codex, Hermes, PI AI
+- **Session management** - persistent agent sessions across runs
+- **CRON schedules** - run agents on a schedule
+- **Memory** - agents remember context across sessions
 
 ## Make an agent in the UI
 
