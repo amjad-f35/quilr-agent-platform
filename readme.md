@@ -1,6 +1,6 @@
 # LiteLLM Agent Platform
 
-LiteLLM Agent Platform lets anyone run a harness (Claude Code, Codex, Hermes) as a service. They select a harness, tools, and a system prompt, deploy it, and can start running and managing agents.
+LiteLLM Agent Platform lets you run a harness (Claude Code, Codex, Hermes) as a service. They select a harness, tools, and a system prompt, deploy it, and can start running and managing agents.
 
  
 LiteLLM Agent Platform manages:
