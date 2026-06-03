@@ -7,7 +7,12 @@ import { Input } from "@/ui/components/ui/input";
 import { Label } from "@/ui/components/ui/label";
 import { Textarea } from "@/ui/components/ui/textarea";
 import { PfpUpload } from "@/ui/components/pfp-upload";
-import { HarnessPicker, HARNESS_OPTIONS, DEFAULT_HARNESS_ID } from "@/ui/components/harness-picker";
+import {
+  HarnessIdentity,
+  HarnessPicker,
+  DEFAULT_HARNESS_ID,
+  getHarnessOption,
+} from "@/ui/components/harness-picker";
 import { ModelPicker } from "@/ui/components/model-picker";
 import { McpToolsPicker, EnabledTools, EnabledToolsUpdater } from "@/ui/components/mcp-tools-picker";
 import { EgressHostsEditor } from "@/ui/components/egress-hosts-editor";
@@ -227,7 +232,7 @@ export function AgentFormFields({
     }
   }
 
-  const harnessLabel = HARNESS_OPTIONS.find((o) => o.id === harnessId)?.label ?? harnessId;
+  const harnessOption = getHarnessOption(harnessId);
 
   return (
     <div className="space-y-5">
@@ -253,9 +258,9 @@ export function AgentFormFields({
         {onHarnessIdChange ? (
           <HarnessPicker value={harnessId} onChange={onHarnessIdChange} disabled={disabled} />
         ) : (
-          <div className="flex items-center gap-2 rounded-md border border-input bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-            <span className="font-mono">{harnessLabel}</span>
-            <span className="text-[11px]">(cannot change after creation)</span>
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-input bg-background/50 px-3 py-2.5 text-sm text-muted-foreground">
+            <HarnessIdentity option={harnessOption} harnessId={harnessId} size="compact" />
+            <span className="shrink-0 text-[11px]">Cannot change</span>
           </div>
         )}
       </div>

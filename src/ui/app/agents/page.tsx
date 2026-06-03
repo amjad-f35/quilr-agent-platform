@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronUp, ChevronDown, MoreHorizontal, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { ChevronUp, ChevronDown, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 
 import { Button } from "@/ui/components/ui/button";
 import { AgentAvatar } from "@/ui/components/agent-avatar";
+import { HarnessIdentity, getHarnessOption } from "@/ui/components/harness-picker";
 import { cn } from "@/ui/lib/utils";
-import { AgentRow, ApiError, deleteAgent, listAgentsPaginated } from "@/ui/lib/api";
+import { AgentRow, ApiError, deleteAgent, listAgentsPaginated, spawnSession } from "@/ui/lib/api";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -79,6 +80,7 @@ export default function AgentsListPage() {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteTargetName, setDeleteTargetName] = useState<string>("");
   const [deleting, setDeleting] = useState(false);
+  const [spawningAgentId, setSpawningAgentId] = useState<string | null>(null);
 
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -134,6 +136,19 @@ export default function AgentsListPage() {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function handleSpawnSession(agentId: string) {
+    if (spawningAgentId) return;
+    setSpawningAgentId(agentId);
+    setError(null);
+    try {
+      const session = await spawnSession(agentId, {});
+      router.push(`/sessions/${session.id}`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+      setSpawningAgentId(null);
     }
   }
 
@@ -230,6 +245,7 @@ export default function AgentsListPage() {
             <tbody>
               {agents.map((agent) => {
                 const sessionCount = agent.session_count ?? 0;
+                const harnessOption = getHarnessOption(agent.harness_id);
                 return (
                   <tr
                     key={agent.id}
@@ -253,7 +269,12 @@ export default function AgentsListPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="font-mono text-[11px] text-muted-foreground">{agent.harness_id}</span>
+                      <HarnessIdentity
+                        option={harnessOption}
+                        harnessId={agent.harness_id}
+                        model={agent.model}
+                        size="compact"
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <span className="font-mono text-[11px] text-muted-foreground">{agent.model}</span>
@@ -263,6 +284,22 @@ export default function AgentsListPage() {
                       {formatRelative(agent.created_at)}
                     </td>
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Start session for ${agent.name?.trim() || agent.id.slice(0, 8)}`}
+                        title="Start session"
+                        onClick={() => void handleSpawnSession(agent.id)}
+                        disabled={spawningAgentId !== null}
+                        className="mr-1 h-7 px-2 text-muted-foreground hover:text-foreground"
+                      >
+                        {spawningAgentId === agent.id ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Play className="size-3.5" />
+                        )}
+                      </Button>
                       <DropdownMenu>
                         <DropdownMenuTrigger
                           type="button"
