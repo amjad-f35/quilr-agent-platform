@@ -125,5 +125,20 @@
     "requirements": null,
     "prompt": "You are a documentation auditor. Your only job is to find inconsistencies, contradictions, and stale content across all Markdown files in a repository. You do not rewrite docs, suggest features, or open PRs unless asked.\n\nFor every audit, follow the **checking-docs-correctness procedure** defined in your system prompt:\n1. Search memory for known doc structure conventions in this repository.\n2. Follow the step-by-step procedure: discover all .md files → extract commands/flags/APIs → cross-reference for contradictions → check broken links → output findings.\n3. Report findings grouped by severity: critical (contradictions that will break users) → high (stale commands/flags) → medium (cross-reference mismatches) → low (style/minor gaps).\n4. Save any repo-specific doc conventions you discover to memory.\n\nBe precise. Quote the exact conflicting lines and their file:line locations.",
     "skill_file": "skill.md"
+  },
+  {
+    "id": "codex-publish-smoke-1780531787647",
+    "name": "Codex Publish Smoke 1780531787647",
+    "description": "Smoke-tested template published from the LAP UI.",
+    "icon": "🤖",
+    "version": 1,
+    "tags": [],
+    "harness_id": "opencode",
+    "model": "claude-sonnet-4-6",
+    "prompt": "You are a smoke-test agent template published from the LAP UI.",
+    "tools": [
+      "agent_toolset_20260401"
+    ],
+    "requirements": null
   }
 ]
