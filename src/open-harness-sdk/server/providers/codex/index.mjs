@@ -42,15 +42,26 @@ export function createRuntime({ model, env = process.env, diagnostics = () => {}
     },
     async *runTurn({ prompt, session }) {
       aborter = new AbortController();
+      const t0 = Date.now();
+      process.stderr.write(`[timing][codex][${session.sessionId}] startThread begin\n`);
       const thread = codex.startThread({ model: currentModel, skipGitRepoCheck: true });
+      process.stderr.write(`[timing][codex][${session.sessionId}] startThread done t=${Date.now() - t0}ms\n`);
+      const tRunStreamed = Date.now();
       const { events } = await thread.runStreamed(prompt, { signal: aborter.signal });
+      process.stderr.write(`[timing][codex][${session.sessionId}] runStreamed returned (stream open) t=${Date.now() - t0}ms (runStreamed_setup=${Date.now() - tRunStreamed}ms)\n`);
       const toFrames = createEventTransformer();
+      let firstEvent = true;
       try {
         for await (const event of events) {
+          if (firstEvent) {
+            process.stderr.write(`[timing][codex][${session.sessionId}] first event type=${event.type} t=${Date.now() - t0}ms\n`);
+            firstEvent = false;
+          }
           for (const frame of toFrames(event, { sessionId: session.sessionId, model: currentModel })) {
             yield frame;
           }
         }
+        process.stderr.write(`[timing][codex][${session.sessionId}] stream complete total_t=${Date.now() - t0}ms\n`);
       } catch (err) {
         if (aborter.signal.aborted) return; // session emits the cancelled result
         diagnostics(`codex runtime error: ${err?.message ?? err}\n`);
