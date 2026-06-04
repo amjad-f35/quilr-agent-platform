@@ -44,8 +44,6 @@ export function createRuntime({ model, permissionMode, cwd, env = process.env, d
     },
     async *runTurn({ prompt, session }) {
       controller = new AbortController();
-      const t0 = Date.now();
-      process.stderr.write(`[timing][claude-code][${session.sessionId}] query begin model=${currentModel}\n`);
       const stream = query({
         prompt,
         options: {
@@ -56,16 +54,10 @@ export function createRuntime({ model, permissionMode, cwd, env = process.env, d
           abortController: controller,
         },
       });
-      let firstMsg = true;
       try {
         for await (const msg of stream) {
-          if (firstMsg) {
-            process.stderr.write(`[timing][claude-code][${session.sessionId}] first message type=${msg.type} t=${Date.now() - t0}ms\n`);
-            firstMsg = false;
-          }
           for (const frame of toFrames(msg, { sessionId: session.sessionId })) yield frame;
         }
-        process.stderr.write(`[timing][claude-code][${session.sessionId}] stream complete total_t=${Date.now() - t0}ms\n`);
       } catch (err) {
         if (controller.signal.aborted) return; // session emits the cancelled result
         diagnostics(`anthropic runtime error: ${err?.message ?? err}\n`);

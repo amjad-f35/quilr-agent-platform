@@ -111,12 +111,6 @@ export function createManagedSession({ sessionId, spawnArgs, serverPath, env, em
   let tail = Promise.resolve();
   let settleTurn = null;
 
-  // Timing state — shared between start() reader and sendUserMessage() runTurn.
-  let tSpawn = null;
-  let tTurnStart = null;
-  let tFirstFrame = null;
-  const agentName = spawnArgs[spawnArgs.indexOf("--agent") + 1] ?? "?";
-
   function settlePendingTurn() {
     if (settleTurn) {
       const done = settleTurn;
@@ -134,13 +128,11 @@ export function createManagedSession({ sessionId, spawnArgs, serverPath, env, em
   }
 
   function start() {
-    tSpawn = Date.now();
     child = spawn("node", [serverPath, ...spawnArgs], {
       env: env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
     alive = true;
-    process.stderr.write(`[timing][${agentName}][${sessionId}] spawned subprocess t=0ms\n`);
 
     // Initialize handshake.
     child.stdin.write(
@@ -152,7 +144,7 @@ export function createManagedSession({ sessionId, spawnArgs, serverPath, env, em
     );
 
     // Drain stderr, keeping the tail so an unexpected exit can report why.
-    // Also forward to process.stderr so timing logs from child are visible.
+    // Forward to process.stderr so harness diagnostics (errors, warnings) are visible.
     let stderrTail = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (d) => {
@@ -171,29 +163,13 @@ export function createManagedSession({ sessionId, spawnArgs, serverPath, env, em
       } catch {
         return;
       }
-      const now = Date.now();
-      // Track first frame after a turn starts
-      if (tTurnStart !== null && tFirstFrame === null && frame.type !== "system" && frame.type !== "control_response") {
-        tFirstFrame = now;
-        process.stderr.write(`[timing][${agentName}][${sessionId}] TTFF=${now - tTurnStart}ms frame=${frame.type} since_spawn=${now - tSpawn}ms\n`);
-      }
-      for (const event of translateFrame(frame)) {
-        if (event.type === "session.status_idle" || event.type === "session.status_error") {
-          const turnMs = tTurnStart !== null ? now - tTurnStart : "?";
-          process.stderr.write(`[timing][${agentName}][${sessionId}] SETTLED event=${event.type} turn_ms=${turnMs} total_since_spawn=${now - tSpawn}ms\n`);
-          tTurnStart = null;
-          tFirstFrame = null;
-        }
-        emitEvent(event);
-      }
+      for (const event of translateFrame(frame)) emitEvent(event);
     });
 
     let errorEmitted = false;
     function onExit(code, signal) {
       alive = false;
       rl.close();
-      const elapsed = tSpawn != null ? Date.now() - tSpawn : "?";
-      process.stderr.write(`[timing][${agentName}][${sessionId}] subprocess exited code=${code} signal=${signal} since_spawn=${elapsed}ms\n`);
       // Only a crash (non-zero code or a signal) is an error. A clean exit(0)
       // after a turn must not flip a freshly-idle session to "error".
       const crashed = signal != null || (code != null && code !== 0);
@@ -232,9 +208,6 @@ export function createManagedSession({ sessionId, spawnArgs, serverPath, env, em
     // next queued message proceed instead of wedging the chain.
     const runTurn = () => {
       if (!alive) return Promise.reject(new Error("session not alive"));
-      tTurnStart = Date.now();
-      tFirstFrame = null;
-      process.stderr.write(`[timing][${agentName}][${sessionId}] TURN_START write_stdin since_spawn=${tTurnStart - tSpawn}ms\n`);
       return new Promise((resolve, reject) => {
         settleTurn = resolve;
         writeOnce(line).catch((err) => {
