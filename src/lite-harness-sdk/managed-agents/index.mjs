@@ -135,7 +135,7 @@ export function createApp(ctx) {
 
 function main() {
   const here = dirname(fileURLToPath(import.meta.url));
-  const serverPath = resolve(here, "../server.mjs"); // the lite-harness subprocess entry
+  const serverPath = resolve(here, "../server/server.mjs"); // the lite-harness subprocess entry
   const ctx = createState({ serverPath, env: process.env });
   const port = Number(process.env.PORT) || 4096;
   createApp(ctx).listen(port, () =>

@@ -38,6 +38,6 @@
     "cloud-vault",
     "tests",
     "playwright.config.ts",
-    "src/open-harness-sdk"
+    "src/lite-harness-sdk"
   ]
 }

@@ -106,6 +106,71 @@ for await (const message of query({
 }
 ```
 
+## Running the lite-harness server
+
+The lite-harness server is a stdio subprocess that the SDKs spawn automatically.
+You can also run it standalone for debugging or direct integration.
+
+**Prerequisites:** install server dependencies first.
+
+```bash
+cd src/lite-harness-sdk/server && npm install
+```
+
+**Run directly (single session, stdin/stdout):**
+
+```bash
+node src/lite-harness-sdk/server/server.mjs \
+  --input-format stream-json \
+  --output-format stream-json \
+  --agent claude \
+  --model claude-sonnet-4-6 \
+  --cwd "$PWD"
+```
+
+**Run as an HTTP server** (Claude Managed Agents wire format — `/v1/sessions` + SSE):
+
+```bash
+export LITELLM_API_BASE="https://your-litellm-gateway.com"
+export LITELLM_API_KEY="<gateway key>"
+node src/lite-harness-sdk/managed-agents/index.mjs   # listens on :4096
+```
+
+Quick smoke test via curl:
+
+```bash
+BASE=http://localhost:4096
+
+# 1. Create a session
+ID=$(curl -s -XPOST $BASE/v1/sessions \
+  -H 'content-type: application/json' \
+  -d '{"agent":"claude-code"}' | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+
+# 2. Send a message
+curl -s -XPOST $BASE/v1/sessions/$ID/events \
+  -H 'content-type: application/json' \
+  -d '{"events":[{"type":"user.message","content":[{"type":"text","text":"hello"}]}]}'
+
+# 3. Read replies — SSE stream; each line is  data: <json>
+#    Blocks until you Ctrl-C. Run in a second terminal or pipe through jq:
+curl -s -N $BASE/v1/sessions/$ID/events/stream \
+  | grep '^data:' | sed 's/^data: //' | jq '{type:.type, content:.content}'
+```
+
+Events to watch for:
+- `agent.message` — text reply from the agent
+- `agent.tool_use` / `agent.tool_result` — tool calls
+- `session.status_idle` — turn complete
+- `session.status_error` — error
+
+Or poll history after the turn completes (no streaming required):
+
+```bash
+curl -s $BASE/v1/sessions/$ID/events | jq '.data[] | select(.type=="agent.message")'
+```
+
+See [`server/README.md`](./server/README.md) and [`managed-agents/README.md`](./managed-agents/README.md) for full details.
+
 ## MCP access
 
 Pass MCP servers in `AgentOptions` when the selected harness should have access

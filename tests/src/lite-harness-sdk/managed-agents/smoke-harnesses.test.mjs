@@ -4,14 +4,14 @@
 //
 //   export LITELLM_API_BASE="https://gateway.litellm-sandbox.ai"
 //   export LITELLM_API_KEY="<gateway key>"
-//   node --test tests/src/open-harness-sdk/server/managed-agents/smoke-harnesses.test.mjs
+//   node --test tests/src/lite-harness-sdk/managed-agents/smoke-harnesses.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-import { createState, createApp } from "../../../../../src/open-harness-sdk/server/managed-agents/index.mjs";
+import { createState, createApp } from "../../../../../src/lite-harness-sdk/managed-agents/index.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HARNESSES = ["claude-code", "codex", "pi-ai"];
@@ -44,7 +44,7 @@ async function waitFor(pred, ms) {
 }
 
 test("live: every harness answers through the LiteLLM gateway", { skip: haveKey ? false : "LITELLM_API_KEY not set" }, async () => {
-  const serverPath = resolve(__dirname, "../../../../../src/open-harness-sdk/server/server.mjs");
+  const serverPath = resolve(__dirname, "../../../../../src/lite-harness-sdk/server/server.mjs");
   const ctx = createState({ serverPath, env: process.env });
   const server = createApp(ctx);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
