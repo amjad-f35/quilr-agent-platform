@@ -221,9 +221,181 @@ async function postJson(
   }
   try {
     return JSON.parse(text);
-  } catch (e) {
+  } catch {
     throw new HarnessHttpError(200, "invalid JSON response body", text.slice(0, 300), url, "POST");
   }
+}
+
+async function getJson(
+  url: string,
+  timeout_ms: number,
+): Promise<unknown> {
+  const res = await fetchWithRetry(url, {
+    method: "GET",
+    headers: harnessAuthHeaders(),
+    signal: AbortSignal.timeout(timeout_ms),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new HarnessHttpError(res.status, res.statusText, text, url, "GET");
+  }
+  return res.json();
+}
+
+export async function isManagedAgentsHarness(
+  sandbox_url: string,
+  timeout_ms: number = 5_000,
+): Promise<boolean> {
+  const url = `${sandbox_url.replace(/\/+$/, "")}/v1/harnesses`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: harnessAuthHeaders(),
+      signal: AbortSignal.timeout(timeout_ms),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function managedAgentId(harness_id: string): string {
+  if (harness_id === "claude-agent-sdk") return "claude-code";
+  if (harness_id === "openai") return "codex";
+  return harness_id;
+}
+
+export async function managedHarnessCreateSession(opts: {
+  sandbox_url: string;
+  harness_id: string;
+  model?: string | null;
+  timeout_ms?: number;
+}): Promise<string> {
+  const {
+    sandbox_url,
+    harness_id,
+    model,
+    timeout_ms = DEFAULT_CREATE_TIMEOUT_MS,
+  } = opts;
+  const data = await postJson(
+    `${sandbox_url}/v1/sessions`,
+    {
+      agent: managedAgentId(harness_id),
+      ...(model ? { model } : {}),
+    },
+    timeout_ms,
+  );
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { id?: unknown }).id !== "string"
+  ) {
+    throw new Error(
+      `unexpected managed harness session response: ${JSON.stringify(data)}`,
+    );
+  }
+  return (data as { id: string }).id;
+}
+
+export async function managedHarnessSendMessage(opts: {
+  sandbox_url: string;
+  harness_session_id: string;
+  parts: HarnessMessagePart[];
+  timeout_ms?: number;
+}): Promise<HarnessMessageResponse> {
+  const {
+    sandbox_url,
+    harness_session_id,
+    parts,
+    timeout_ms = DEFAULT_CREATE_TIMEOUT_MS,
+  } = opts;
+  await postJson(
+    `${sandbox_url}/v1/sessions/${encodeURIComponent(harness_session_id)}/events`,
+    {
+      events: [
+        {
+          type: "user.message",
+          content: parts,
+        },
+      ],
+    },
+    timeout_ms,
+  );
+  return {
+    info: {
+      id: `managed-${Date.now()}`,
+      sessionID: harness_session_id,
+      role: "assistant",
+    },
+    parts: [],
+  } as HarnessMessageResponse;
+}
+
+export async function managedHarnessListEvents(opts: {
+  sandbox_url: string;
+  harness_session_id: string;
+  timeout_ms?: number;
+}): Promise<Array<{ type: string; content?: unknown }>> {
+  const {
+    sandbox_url,
+    harness_session_id,
+    timeout_ms = DEFAULT_CREATE_TIMEOUT_MS,
+  } = opts;
+  const data = await getJson(
+    `${sandbox_url}/v1/sessions/${encodeURIComponent(harness_session_id)}/events`,
+    timeout_ms,
+  );
+  if (!data || typeof data !== "object" || !Array.isArray((data as { data?: unknown }).data)) {
+    return [];
+  }
+  return (data as { data: Array<{ type: string; content?: unknown }> }).data;
+}
+
+export async function managedHarnessListMessages(opts: {
+  sandbox_url: string;
+  harness_session_id: string;
+  timeout_ms?: number;
+}): Promise<HarnessMessage[]> {
+  const events = await managedHarnessListEvents(opts);
+  return events.flatMap((event, index) => {
+    if (event.type !== "user.message" && event.type !== "agent.message") {
+      return [];
+    }
+    return [
+      {
+        info: {
+          id: `${event.type.replace(".", "-")}-${index}`,
+          sessionID: opts.harness_session_id,
+          role: event.type === "user.message" ? "user" : "assistant",
+        },
+        parts: Array.isArray(event.content)
+          ? (event.content as HarnessMessagePart[])
+          : [],
+      },
+    ];
+  });
+}
+
+export async function managedHarnessOpenEventStream(opts: {
+  sandbox_url: string;
+  harness_session_id: string;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  const { sandbox_url, harness_session_id, signal } = opts;
+  const url = `${sandbox_url}/v1/sessions/${encodeURIComponent(harness_session_id)}/events/stream`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { accept: "text/event-stream", ...harnessAuthHeaders() },
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new HarnessHttpError(res.status, res.statusText, text, url, "GET");
+  }
+  if (!res.body) {
+    throw new Error(`managed harness ${url} returned no body`);
+  }
+  return res as unknown as Response;
 }
 
 export async function harnessCreateSession(

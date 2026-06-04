@@ -45,7 +45,11 @@ import { ZodError } from "zod";
 
 import { assertAuth } from "@/api/auth";
 import { prisma } from "@/api/db";
-import { harnessOpenEventStream } from "@/api/harness";
+import {
+  harnessOpenEventStream,
+  isManagedAgentsHarness,
+  managedHarnessOpenEventStream,
+} from "@/api/harness";
 import { readPodPhase } from "@/api/k8s";
 import { HttpError, httpError } from "@/api/types";
 
@@ -69,6 +73,7 @@ const READY_POLL_INTERVAL_MS = 1_000;
 
 interface BusEvent {
   id?: string;
+  session_id?: string;
   type: string;
   properties?: Record<string, unknown> & { sessionID?: string };
 }
@@ -151,6 +156,7 @@ export async function GET(req: Request, ctx: RouteContext) {
     }
 
     const { sandbox_url, harness_session_id } = ready;
+    const managedHarness = await isManagedAgentsHarness(sandbox_url);
 
     const upstreamCtl = new AbortController();
     // Tear down the upstream subscription if the client hangs up before
@@ -185,10 +191,16 @@ export async function GET(req: Request, ctx: RouteContext) {
 
         let upstream: Response;
         try {
-          upstream = await harnessOpenEventStream({
-            sandbox_url,
-            signal: upstreamCtl.signal,
-          });
+          upstream = managedHarness
+            ? await managedHarnessOpenEventStream({
+                sandbox_url,
+                harness_session_id,
+                signal: upstreamCtl.signal,
+              })
+            : await harnessOpenEventStream({
+                sandbox_url,
+                signal: upstreamCtl.signal,
+              });
         } catch (err) {
           console.error("harness event stream open failed", err);
           // No raw harness frame to forward here — but we still need to
@@ -219,6 +231,14 @@ export async function GET(req: Request, ctx: RouteContext) {
           "server.heartbeat",
         ]);
         const handleBusEvent = (evt: BusEvent) => {
+          if (managedHarness) {
+            if (evt.session_id && evt.session_id !== harness_session_id) return false;
+            send(evt);
+            if (evt.type === "session.status_idle" || evt.type === "session.idle") {
+              return !follow;
+            }
+            return false;
+          }
           const sid = evt.properties?.sessionID;
           if (!sid) {
             // No sessionID — only forward known-safe global lifecycle events.

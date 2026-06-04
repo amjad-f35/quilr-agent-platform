@@ -73,6 +73,9 @@ const EnvSchema = z.object({
   PLATFORM_INTERNAL_URL: z.string().default(""),
   // Local dev: skip K8s and route all sessions to this harness URL.
   LOCAL_SANDBOX_URL: z.string().optional(),
+  // Managed lite-harness server URL. When set, LAP creates downstream sessions
+  // through /v1/sessions and streams /v1/sessions/:id/events/stream.
+  LITE_HARNESS_SERVER_URL: z.string().optional(),
   // Local dev: skip K8s executor pod; route all provision calls to this Docker container.
   LOCAL_EXECUTOR_URL: z.string().optional(),
   // Shared secret used to authenticate calls to the executor pod's /execute
@@ -180,6 +183,7 @@ function parseEnv(): ServerEnv {
     ...data,
     HARNESS_TOKEN_SIGNING_KEY: signingKey,
     LOCAL_SANDBOX_URL: data.LOCAL_SANDBOX_URL,
+    LITE_HARNESS_SERVER_URL: data.LITE_HARNESS_SERVER_URL,
     LOCAL_EXECUTOR_URL: data.LOCAL_EXECUTOR_URL,
     containerEnvPassthrough: collectContainerEnvPassthrough(process.env),
   };

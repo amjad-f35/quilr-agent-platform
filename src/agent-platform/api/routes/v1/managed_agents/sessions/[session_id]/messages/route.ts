@@ -9,7 +9,11 @@
 
 import { assertAuth } from "@/api/auth";
 import { prisma } from "@/api/db";
-import { harnessListMessages } from "@/api/harness";
+import {
+  harnessListMessages,
+  isManagedAgentsHarness,
+  managedHarnessListMessages,
+} from "@/api/harness";
 import { HttpError, httpError } from "@/api/types";
 
 export const runtime = "nodejs";
@@ -39,10 +43,12 @@ export async function GET(req: Request, ctx: RouteContext) {
     }
 
     try {
-      const msgs = await harnessListMessages({
-        sandbox_url: row.sandbox_url,
-        harness_session_id: row.harness_session_id,
-      });
+      const msgs = await (await isManagedAgentsHarness(row.sandbox_url)
+        ? managedHarnessListMessages
+        : harnessListMessages)({
+          sandbox_url: row.sandbox_url,
+          harness_session_id: row.harness_session_id,
+        });
       // Harness returned empty — session was lost from memory (restart,
       // disconnect, or harness_session_id mismatch). Fall back to the
       // persisted history snapshot rather than showing a blank thread.

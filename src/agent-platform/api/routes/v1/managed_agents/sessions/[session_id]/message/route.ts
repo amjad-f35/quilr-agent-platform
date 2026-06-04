@@ -30,8 +30,11 @@ import {
   expandMessage,
   harnessListMessages,
   harnessSendMessage,
+  isManagedAgentsHarness,
   isDeadSessionError,
   isHardConnectFailure,
+  managedHarnessListMessages,
+  managedHarnessSendMessage,
   prependAgentSystemPrompt,
 } from "@/api/harness";
 import { registry } from "@/api/metrics";
@@ -76,10 +79,12 @@ async function persistHistorySnapshot(opts: {
   harness_session_id: string;
 }): Promise<void> {
   try {
-    const msgs = await harnessListMessages({
-      sandbox_url: opts.sandbox_url,
-      harness_session_id: opts.harness_session_id,
-    });
+    const msgs = await (await isManagedAgentsHarness(opts.sandbox_url)
+      ? managedHarnessListMessages
+      : harnessListMessages)({
+        sandbox_url: opts.sandbox_url,
+        harness_session_id: opts.harness_session_id,
+      });
     console.log(`[heartbeat] session=${opts.session_id} snapshot msgs=${msgs.length}`);
     await prisma.session.update({
       where: { session_id: opts.session_id },
@@ -219,12 +224,18 @@ async function recoverAndResend(opts: {
   const hb = startHeartbeat(session_id, recovered.sandbox_url, recovered.harness_session_id);
   let response: HarnessMessageResponse;
   try {
-    response = await harnessSendMessage({
-      sandbox_url: recovered.sandbox_url,
-      harness_session_id: recovered.harness_session_id,
-      model: recovered.agent_model,
-      parts,
-    });
+    response = await (await isManagedAgentsHarness(recovered.sandbox_url)
+      ? managedHarnessSendMessage({
+          sandbox_url: recovered.sandbox_url,
+          harness_session_id: recovered.harness_session_id,
+          parts,
+        })
+      : harnessSendMessage({
+          sandbox_url: recovered.sandbox_url,
+          harness_session_id: recovered.harness_session_id,
+          model: recovered.agent_model,
+          parts,
+        }));
   } finally {
     clearInterval(hb);
   }
@@ -297,17 +308,22 @@ export async function POST(req: Request, ctx: RouteContext) {
       parts,
     });
 
-    // eslint-disable-next-line prefer-const
     let response: HarnessMessageResponse | undefined;
     console.log(`[message] session=${session_id} sandbox_url=${cached.sandbox_url} harness_session_id=${cached.harness_session_id}`);
     const hb = startHeartbeat(session_id, cached.sandbox_url, cached.harness_session_id);
     try {
-      response = await harnessSendMessage({
-        sandbox_url: cached.sandbox_url,
-        harness_session_id: cached.harness_session_id,
-        model: cached.agent_model,
-        parts,
-      });
+      response = await (await isManagedAgentsHarness(cached.sandbox_url)
+        ? managedHarnessSendMessage({
+            sandbox_url: cached.sandbox_url,
+            harness_session_id: cached.harness_session_id,
+            parts,
+          })
+        : harnessSendMessage({
+            sandbox_url: cached.sandbox_url,
+            harness_session_id: cached.harness_session_id,
+            model: cached.agent_model,
+            parts,
+          }));
     } catch (err) {
       // Network-level failure (harness mid-restart): wait briefly and retry
       // once before falling through to full recovery. This handles the window
@@ -320,12 +336,18 @@ export async function POST(req: Request, ctx: RouteContext) {
         );
         await new Promise<void>((r) => setTimeout(r, 3000));
         try {
-          response = await harnessSendMessage({
-            sandbox_url: cached.sandbox_url,
-            harness_session_id: cached.harness_session_id,
-            model: cached.agent_model,
-            parts,
-          });
+          response = await (await isManagedAgentsHarness(cached.sandbox_url)
+            ? managedHarnessSendMessage({
+                sandbox_url: cached.sandbox_url,
+                harness_session_id: cached.harness_session_id,
+                parts,
+              })
+            : harnessSendMessage({
+                sandbox_url: cached.sandbox_url,
+                harness_session_id: cached.harness_session_id,
+                model: cached.agent_model,
+                parts,
+              }));
           retryErr = null;
         } catch (retryError) {
           retryErr = retryError;

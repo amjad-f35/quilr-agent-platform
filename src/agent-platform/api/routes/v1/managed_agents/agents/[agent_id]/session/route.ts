@@ -50,7 +50,11 @@ import {
   harnessCreateSession,
   harnessListMessages,
   harnessSendMessage,
+  isManagedAgentsHarness,
   isDeadSessionError,
+  managedHarnessCreateSession,
+  managedHarnessListMessages,
+  managedHarnessSendMessage,
   prependAgentSystemPrompt,
 } from "@/api/harness";
 import {
@@ -293,13 +297,15 @@ async function coldBringUp(
 ): Promise<BringUpResult> {
   const spawnStart = Date.now();
   try {
-    // Local dev bypass: skip K8s entirely and use the local harness directly.
-    if (env.LOCAL_SANDBOX_URL) {
-      console.log(`[local-dev] bypassing K8s, using LOCAL_SANDBOX_URL=${env.LOCAL_SANDBOX_URL}`);
+    // Managed harness server path: skip K8s entirely and call the configured
+    // lite-harness managed-agents server directly.
+    const configuredHarnessUrl = env.LITE_HARNESS_SERVER_URL;
+    if (configuredHarnessUrl) {
+      console.log(`[managed-harness] bypassing K8s, using server=${configuredHarnessUrl}`);
       await setPhase(session_id, "waiting_harness");
-      await waitHttpReady(env.LOCAL_SANDBOX_URL);
+      await waitHttpReady(configuredHarnessUrl);
       await setPhase(session_id, "harness_ready");
-      const result = await finishBringUp(agent, session_id, body, env.LOCAL_SANDBOX_URL);
+      const result = await finishBringUp(agent, session_id, body, configuredHarnessUrl);
       registry.observe("session_spawn_duration_seconds", { path: "cold" }, (Date.now() - spawnStart) / 1000);
       registry.inc("session_spawn_total", { path: "cold", result: "success" });
       return result;
@@ -418,15 +424,22 @@ async function finishBringUp(
   const { specs: mcpServers, warning: mcpWarning } = await resolveAgentMcpServers(rawMcpServerIds);
   if (mcpWarning) console.warn(`finishBringUp session_id=${session_id}: ${mcpWarning}`);
 
-  const harness_session_id = await harnessCreateSession({
-    sandbox_url,
-    title: body.title,
-    prompt: effectivePrompt || undefined,
-    files: skillFiles.length > 0 ? skillFiles : undefined,
-    mcp_servers: mcpServers,
-    agent_id: agent.agent_id,
-    platform_session_id: session_id,
-  });
+  const managedHarness = await isManagedAgentsHarness(sandbox_url);
+  const harness_session_id = managedHarness
+    ? await managedHarnessCreateSession({
+        sandbox_url,
+        harness_id: agent.harness_id,
+        model: agent.model,
+      })
+    : await harnessCreateSession({
+        sandbox_url,
+        title: body.title,
+        prompt: effectivePrompt || undefined,
+        files: skillFiles.length > 0 ? skillFiles : undefined,
+        mcp_servers: mcpServers,
+        agent_id: agent.agent_id,
+        platform_session_id: session_id,
+      });
   registry.observe("session_phase_duration_seconds", { phase: "cloning_repo" }, (Date.now() - cloneStart) / 1000);
   // Flip status=ready as soon as the harness handshake completes. The
   // sandbox is fully usable at this point — the initial_prompt (if any) is
@@ -474,6 +487,7 @@ async function finishBringUp(
       session_id,
       sandbox_url,
       harness_session_id,
+      effectivePrompt,
       body.initial_prompt ?? "",
       body.initial_attachments,
     );
@@ -503,7 +517,9 @@ async function snapshotThreadToHistory(
   harness_session_id: string,
 ): Promise<void> {
   try {
-    const msgs = await harnessListMessages({ sandbox_url, harness_session_id });
+    const msgs = await (await isManagedAgentsHarness(sandbox_url)
+      ? managedHarnessListMessages
+      : harnessListMessages)({ sandbox_url, harness_session_id });
     console.log(`[heartbeat] session=${session_id} snapshot msgs=${msgs.length}`);
     if (msgs.length === 0) return;
     await prisma.session.update({
@@ -522,6 +538,7 @@ async function runInitialPrompt(
   session_id: string,
   sandbox_url: string,
   harness_session_id: string,
+  systemPrompt: string,
   initial_prompt: string,
   initial_attachments?: InitialAttachment[],
 ): Promise<void> {
@@ -555,7 +572,7 @@ async function runInitialPrompt(
     // see prependAgentSystemPrompt). The interactive /message route does the
     // same on turn 1, gated on no prior turns, so this never double-injects.
     const parts = prependAgentSystemPrompt(
-      agent.prompt,
+      systemPrompt,
       initial_attachments && initial_attachments.length > 0
         ? [
             ...(initial_prompt ? [{ type: "text", text: initial_prompt }] : []),
@@ -578,12 +595,18 @@ async function runInitialPrompt(
       harness_session_id,
       parts: parts as import("@/api/types").HarnessMessagePart[],
     });
-    const response = await harnessSendMessage({
-      sandbox_url,
-      harness_session_id,
-      model: agent.model,
-      parts,
-    });
+    const response = await (await isManagedAgentsHarness(sandbox_url)
+      ? managedHarnessSendMessage({
+          sandbox_url,
+          harness_session_id,
+          parts,
+        })
+      : harnessSendMessage({
+          sandbox_url,
+          harness_session_id,
+          model: agent.model,
+          parts,
+        }));
     await prisma.session.update({
       where: { session_id },
       data: {
@@ -644,20 +667,27 @@ async function runInitialPrompt(
           ? (agent.mcp_servers as unknown[]).filter((v): v is string => typeof v === "string")
           : [];
         const { specs: recoveryMcpServers } = await resolveAgentMcpServers(rawMcpServerIds).catch(() => ({ specs: [] }));
-        const newHarnessSessionId = await harnessCreateSession({
-          sandbox_url,
-          title: "recovery",
-          sandbox_tools: true,
-          agent_id: agent.agent_id,
-          mcp_servers: recoveryMcpServers,
-          platform_session_id: session_id,
-        });
+        const managedHarness = await isManagedAgentsHarness(sandbox_url);
+        const newHarnessSessionId = managedHarness
+          ? await managedHarnessCreateSession({
+              sandbox_url,
+              harness_id: agent.harness_id,
+              model: agent.model,
+            })
+          : await harnessCreateSession({
+              sandbox_url,
+              title: "recovery",
+              sandbox_tools: true,
+              agent_id: agent.agent_id,
+              mcp_servers: recoveryMcpServers,
+              platform_session_id: session_id,
+            });
         await prisma.session.update({
           where: { session_id },
           data: { harness_session_id: newHarnessSessionId },
         });
         const parts = prependAgentSystemPrompt(
-          agent.prompt,
+          systemPrompt,
           initial_attachments && initial_attachments.length > 0
             ? [
                 ...(initial_prompt
@@ -687,12 +717,18 @@ async function runInitialPrompt(
             harness_session_id: newHarnessSessionId,
             parts: parts as import("@/api/types").HarnessMessagePart[],
           });
-          const retryResponse = await harnessSendMessage({
-            sandbox_url,
-            harness_session_id: newHarnessSessionId,
-            model: agent.model,
-            parts,
-          });
+          const retryResponse = await (managedHarness
+            ? managedHarnessSendMessage({
+                sandbox_url,
+                harness_session_id: newHarnessSessionId,
+                parts,
+              })
+            : harnessSendMessage({
+                sandbox_url,
+                harness_session_id: newHarnessSessionId,
+                model: agent.model,
+                parts,
+              }));
           await prisma.session.update({
             where: { session_id },
             data: {
@@ -768,11 +804,15 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
   // were provisioned without them, so a request that carries env_vars
   // can't be served from the pool — always go cold.
   const hasEnvVars = body.env_vars && Object.keys(body.env_vars).length > 0;
-  const warm = hasEnvVars ? null : await claimWarmTask(agent_id);
+  const usesConfiguredHarnessServer = Boolean(env.LITE_HARNESS_SERVER_URL);
+  const warm = hasEnvVars || usesConfiguredHarnessServer
+    ? null
+    : await claimWarmTask(agent_id);
   // Replenish immediately on claim — don't wait for the 60s reconciler tick.
   if (warm) void topUpWarmPool().catch(() => {});
-  // Track warm pool hit/miss only when pool was actually consulted.
-  if (!hasEnvVars) {
+  // Track warm pool hit/miss only when pool was actually consulted. Managed
+  // harness server sessions do not provision or claim sandbox tasks.
+  if (!hasEnvVars && !usesConfiguredHarnessServer) {
     if (warm) registry.inc("warm_pool_hit_total");
     else registry.inc("warm_pool_miss_total");
   }
@@ -910,6 +950,7 @@ export const POST = wrap<RouteContext>(async (req, ctx) => {
         session.session_id,
         inlineUrl,
         harness_session_id,
+        agent.prompt ?? "",
         body.initial_prompt ?? "",
         body.initial_attachments,
       );
