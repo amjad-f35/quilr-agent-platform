@@ -52,6 +52,7 @@ export function createState({ serverPath, env }) {
 
 // ORDER MATTERS — the stream route must precede the plain events route.
 const ROUTES = [
+  { method: "GET",    pattern: "/v1/harnesses",                  handler: routes.listHarnesses },
   { method: "POST",   pattern: "/v1/sessions",                   handler: routes.createSession },
   { method: "GET",    pattern: "/v1/sessions/:id/events/stream", handler: routes.streamEvents },
   { method: "GET",    pattern: "/v1/sessions/:id/events",        handler: routes.listEvents },

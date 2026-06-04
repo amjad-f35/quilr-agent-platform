@@ -13,8 +13,9 @@ It is a thin bridge: each session spawns the existing `../server.mjs` subprocess
 core.mjs      ids, event factories, HTTP error/response helpers
 store.mjs     in-memory session records + event history with SSE pub/sub
 runtime.mjs   harness resolution, frame translation, per-session subprocess
-routes.mjs    the six request handlers
+routes.mjs    the seven request handlers
 index.mjs     state wiring + HTTP router + entry point
+client.mjs    thin async client helpers (listHarnesses, createSession, …)
 ```
 
 Tests live at the repo root, mirroring this path:
@@ -23,7 +24,8 @@ Tests live at the repo root, mirroring this path:
 ## Endpoints (V0)
 
 ```
-POST   /v1/sessions                      create session (spawns a harness subprocess)
+GET    /v1/harnesses                      list available harness IDs
+POST   /v1/sessions                       create session (spawns a harness subprocess)
 GET    /v1/sessions/:id                   get session
 DELETE /v1/sessions/:id                   destroy session (kills subprocess)
 POST   /v1/sessions/:id/events            send a user message (fire-and-forget, 200)
@@ -31,7 +33,30 @@ GET    /v1/sessions/:id/events            event history
 GET    /v1/sessions/:id/events/stream     live SSE event stream
 ```
 
-Harnesses: `claude-code`, `codex`, `pi-ai`.
+```bash
+curl http://localhost:4096/v1/harnesses
+# {"object":"list","data":[{"id":"claude-code"},{"id":"codex"},{"id":"pi-ai"}]}
+```
+
+## SDK helper (client.mjs)
+
+`client.mjs` exports thin async helpers — no hand-rolled `fetch`:
+
+```js
+import {
+  listHarnesses, createSession, sendMessage, streamEvents, deleteSession,
+} from "./src/open-harness-sdk/server/managed-agents/client.mjs";
+
+const harnesses = await listHarnesses("http://localhost:4096");
+// → [{ id: "claude-code" }, { id: "codex" }, { id: "pi-ai" }]
+
+const session = await createSession("http://localhost:4096", { agent: "claude-code" });
+await sendMessage("http://localhost:4096", session.id, "say hello");
+for await (const event of streamEvents("http://localhost:4096", session.id)) {
+  console.log(event.type, event);
+}
+await deleteSession("http://localhost:4096", session.id);
+```
 
 ## Run the server
 

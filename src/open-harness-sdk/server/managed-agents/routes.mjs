@@ -1,7 +1,12 @@
-// routes.mjs — the six V0 request handlers. Each is (req, res, ctx, params).
+// routes.mjs — the seven V0 request handlers. Each is (req, res, ctx, params).
 // HttpErrors thrown here are caught by the router in index.mjs.
-import { HttpError, sendJson, userMessageEvent, sessionErrorEvent } from "./core.mjs";
+import { HttpError, sendJson, userMessageEvent, sessionErrorEvent, SUPPORTED_HARNESSES } from "./core.mjs";
 import { resolveHarness } from "./runtime.mjs";
+
+/** GET /v1/harnesses */
+export async function listHarnesses(_req, res) {
+  sendJson(res, 200, { object: "list", data: SUPPORTED_HARNESSES.map((id) => ({ id })) });
+}
 
 /** POST /v1/sessions — body { agent, model? } */
 export async function createSession(req, res, ctx) {
