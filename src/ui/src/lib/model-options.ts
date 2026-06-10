@@ -5,6 +5,14 @@ export function modelOptions(models: string[], currentModel: string): string[] {
   return current ? [current] : [];
 }
 
+export function runtimeSupportsModelDiscovery(runtime?: string | null): boolean {
+  return runtime !== "elastic_agent_builder";
+}
+
+export function defaultModelForRuntime(runtime?: string | null): string {
+  return runtime === "elastic_agent_builder" ? "elastic-agent-builder" : "";
+}
+
 export function selectedRuntimeModel(models: string[], currentModel: string): string {
   const options = normalizeModels(models);
   const current = currentModel.trim();

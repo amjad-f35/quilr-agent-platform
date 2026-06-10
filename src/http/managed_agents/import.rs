@@ -106,7 +106,7 @@ fn provider_registry() -> Vec<&'static dyn ImportAgentsProvider> {
 fn provider_for_id(provider_id: &str) -> Result<&'static dyn ImportAgentsProvider, GatewayError> {
     provider_registry()
         .into_iter()
-        .find(|provider| provider.id() == provider_id)
+        .find(|provider| provider.id() == provider_id || provider.api_spec() == provider_id)
         .ok_or_else(|| GatewayError::NotFound(format!("import provider not found: {provider_id}")))
 }
 
@@ -127,7 +127,7 @@ async fn create_input(
         name: agent_name(&agent).to_owned(),
         owner_id: owner_id.to_owned(),
         description: agent.description.clone(),
-        runtime: Some(provider.id().to_owned()),
+        runtime: Some(provider.api_spec().to_owned()),
         harness: Some("claude-code".to_owned()),
         prompt: Some(system.clone()),
         tools: Some(json!([])),
@@ -198,10 +198,14 @@ fn agent_config(
     credential_mode: &CredentialMode,
     credential_name: Option<String>,
 ) -> Value {
-    json!({
-        "runtime": provider.id(),
+    let mut config = json!({
+        "runtime": provider.api_spec(),
         "source": source_config(provider, endpoint, agent, credential_mode, credential_name),
-    })
+    });
+    if provider.api_spec() == "elastic_agent_builder" {
+        config["elastic_agent_id"] = agent.external_id.clone().into();
+    }
+    config
 }
 
 fn source_config(
@@ -273,3 +277,7 @@ async fn save_provider_credential(
     )
     .await
 }
+
+#[cfg(test)]
+#[path = "import_tests.rs"]
+mod tests;

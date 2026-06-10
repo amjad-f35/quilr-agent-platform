@@ -21,7 +21,12 @@ import {
 } from "@/components/ui/select";
 import { ScheduleEditor } from "@/components/schedule-editor";
 import { apiErrorMessage, getAgent, updateAgent, listAgents, listModels, listAgentRuntimes } from "@/lib/api";
-import { modelOptions, selectedRuntimeModel } from "@/lib/model-options";
+import {
+  defaultModelForRuntime,
+  modelOptions,
+  runtimeSupportsModelDiscovery,
+  selectedRuntimeModel,
+} from "@/lib/model-options";
 import { DEFAULT_TIMEZONE } from "@/lib/schedule";
 import type { Agent, AgentRuntime, AgentRuntimeId } from "@/lib/types";
 
@@ -141,6 +146,13 @@ function AgentEdit() {
     setModels([]);
     setModelsLoading(true);
     setModelsError(null);
+    if (!runtimeSupportsModelDiscovery(runtime)) {
+      const defaultModel = defaultModelForRuntime(runtime);
+      setModels(defaultModel ? [defaultModel] : []);
+      setModelsLoading(false);
+      setForm((current) => ({ ...current, model: current.model.trim() || defaultModel }));
+      return;
+    }
     listModels(runtime)
       .then((modelList) => {
         if (cancelled) return;

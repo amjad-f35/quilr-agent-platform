@@ -84,11 +84,14 @@ async fn custom_harnesses(
 
 fn append_import_providers(result: &mut Vec<HarnessResponse>) {
     for provider in import_runtime_providers() {
-        if result.iter().any(|harness| harness.alias == provider.id) {
+        if result
+            .iter()
+            .any(|harness| harness.alias == provider.id || harness.api_spec == provider.api_spec)
+        {
             continue;
         }
         result.push(HarnessResponse {
-            alias: provider.id.to_owned(),
+            alias: provider.api_spec.to_owned(),
             api_spec: provider.api_spec.to_owned(),
             display_name: provider.name.to_owned(),
             api_base: String::new(),
@@ -128,4 +131,28 @@ pub(super) fn decrypt_field(
         GatewayError::InvalidConfig(format!("harness credential missing field: {field}"))
     })?;
     credential_crypto::decrypt_value(enc, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_providers_do_not_duplicate_builtin_runtime_specs() {
+        let mut harnesses = vec![HarnessResponse {
+            alias: "elastic_agent_builder".to_owned(),
+            api_spec: "elastic_agent_builder".to_owned(),
+            display_name: "Elastic Agent Builder".to_owned(),
+            api_base: "http://localhost:5601".to_owned(),
+            is_default: true,
+            connected: false,
+            masked_api_key: None,
+            tools: Vec::new(),
+        }];
+
+        append_import_providers(&mut harnesses);
+
+        assert_eq!(harnesses.len(), 1);
+        assert_eq!(harnesses[0].alias, "elastic_agent_builder");
+    }
 }

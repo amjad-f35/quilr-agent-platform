@@ -38,6 +38,7 @@ import type { PendingApproval, RuntimeAgentEvent } from "@/lib/api";
 import { ToolApprovalPanel } from "@/components/tool-approval-panel";
 import type { Agent, AgentRuntimeId, HarnessMessage, RuntimeHarness } from "@/lib/types";
 import { resolveApiSpec } from "@/lib/types";
+import { defaultModelForRuntime, runtimeSupportsModelDiscovery } from "@/lib/model-options";
 import type { Frame } from "@/components/inspector-panel";
 import SessionsPage from "../sessions/page";
 
@@ -525,6 +526,14 @@ function ChatInner() {
 
   useEffect(() => {
     let cancelled = false;
+    const runtimeDefaultModel = defaultModelForRuntime(sessionRuntime);
+    if (sessionRuntime && !runtimeSupportsModelDiscovery(sessionRuntime)) {
+      setModels(runtimeDefaultModel ? [runtimeDefaultModel] : []);
+      setModel(runtimeDefaultModel);
+      return () => {
+        cancelled = true;
+      };
+    }
     const initialModels = sessionRuntime ? [] : FALLBACK_MODELS;
     setModels(initialModels);
     setModel((prev) => (initialModels.includes(prev) ? prev : initialModels[0] ?? ""));

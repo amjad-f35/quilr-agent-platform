@@ -70,7 +70,12 @@ import {
   listRules,
   listSkills,
 } from "@/lib/api";
-import { modelOptions, selectedRuntimeModel } from "@/lib/model-options";
+import {
+  defaultModelForRuntime,
+  modelOptions,
+  runtimeSupportsModelDiscovery,
+  selectedRuntimeModel,
+} from "@/lib/model-options";
 import { runtimeBrandIconId } from "@/lib/runtime-branding";
 import { scheduleLabel } from "@/lib/schedule";
 import type { Agent, AgentRuntime, Rule, Skill, RuntimeHarness } from "@/lib/types";
@@ -202,6 +207,19 @@ export default function NewAgentPage() {
     setModels([]);
     setModelsLoading(true);
     setModelsError(null);
+    if (!runtimeSupportsModelDiscovery(runtime)) {
+      const defaultModel = defaultModelForRuntime(runtime);
+      setModels(defaultModel ? [defaultModel] : []);
+      setModelsLoading(false);
+      setConfigText((current) => {
+        const currentDraft = parseAgentDraftConfig(current);
+        if (currentDraft.error && currentDraft.error !== "Model is required.") return current;
+        if (currentDraft.draft.runtime.trim() !== runtime) return current;
+        if (currentDraft.draft.model.trim() === defaultModel) return current;
+        return stringifyAgentDraft({ ...currentDraft.draft, model: defaultModel });
+      });
+      return;
+    }
     listModels(runtime)
       .then((modelValues) => {
         if (cancelled) return;

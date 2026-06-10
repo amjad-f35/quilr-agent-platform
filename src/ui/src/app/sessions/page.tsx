@@ -22,7 +22,7 @@ import {
   listModels,
   listSessions,
 } from "@/lib/api";
-import { selectedRuntimeModel } from "@/lib/model-options";
+import { defaultModelForRuntime, runtimeSupportsModelDiscovery, selectedRuntimeModel } from "@/lib/model-options";
 import { runtimeBrandIconId } from "@/lib/runtime-branding";
 import type { Agent, AgentRuntimeId, RuntimeHarness, BuiltinRuntimeId } from "@/lib/types";
 import { resolveApiSpec } from "@/lib/types";
@@ -164,7 +164,9 @@ function SessionsStart() {
           : await (async () => {
               const runtimeForSession = runtimeId as AgentRuntimeId;
               const runtimeSpec = resolveApiSpec(runtimeForSession, harnesses);
-              const model = selectedRuntimeModel(await listModels(runtimeForSession), "");
+              const model = runtimeSupportsModelDiscovery(runtimeForSession)
+                ? selectedRuntimeModel(await listModels(runtimeForSession), "")
+                : defaultModelForRuntime(runtimeForSession);
               if (!model) {
                 throw new Error(`No models are configured for ${runtimeLabel(selectedRuntime ?? runtimeForSession)}.`);
               }
