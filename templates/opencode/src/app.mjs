@@ -13,7 +13,7 @@ import {
   agentResponse,
   sessionResponse,
   partsFromEvents,
-  translateOpencodeEvent,
+  createOpencodeEventTranslator,
 } from "./anthropic.mjs";
 
 /**
@@ -236,6 +236,7 @@ export function createApp({
     const agentId = store.getSessionAgent(req.params.id);
     const agent = agentId ? store.getAgent(agentId) : null;
     const model = agent?.model || null;
+    const translate = createOpencodeEventTranslator({ sessionId: req.params.id, model });
 
     res.setHeader("content-type", "text/event-stream");
     res.setHeader("cache-control", "no-cache");
@@ -283,7 +284,7 @@ export function createApp({
             continue;
           }
 
-          const out = translateOpencodeEvent(ev, { sessionId: req.params.id, model });
+          const out = translate(ev);
           if (out && out.event) {
             res.write(`event: ${out.event}\ndata: ${JSON.stringify(out.data)}\n\n`);
           }
