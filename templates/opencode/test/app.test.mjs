@@ -21,10 +21,39 @@ function fakeRes(body) {
   };
 }
 
+function fakeSse(events = [], { ok = true, status = 200 } = {}) {
+  if (!ok) {
+    return {
+      ok: false,
+      status,
+      body: null,
+      json: async () => ({}),
+      text: async () => "",
+    };
+  }
+
+  const encoder = new TextEncoder();
+  return {
+    ok: true,
+    status,
+    body: new ReadableStream({
+      start(controller) {
+        for (const ev of events) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(ev)}\n\n`));
+        }
+        controller.close();
+      },
+    }),
+    json: async () => ({}),
+    text: async () => "",
+  };
+}
+
 // Build the app with fake opencode collaborators and capture their calls.
-function buildHarness() {
+function buildHarness({ eventStreams = [[]], eventResponse = null } = {}) {
   const store = createStore(":memory:");
   const calls = { ocFetch: [], provisionAgent: [], ensureProviderModel: [], reboots: 0 };
+  let eventStreamIndex = 0;
 
   const app = createApp({
     store,
@@ -52,6 +81,10 @@ function buildHarness() {
       calls.ocFetch.push({ path, init });
       if (path === "/session") return fakeRes({ id: "ses_test" });
       if (path.endsWith("/prompt_async")) return fakeRes({ ok: true });
+      if (path === "/event") {
+        if (eventResponse) return eventResponse();
+        return fakeSse(eventStreams[eventStreamIndex++] || []);
+      }
       return fakeRes({});
     },
     checkOpencode: async () => true,
@@ -149,6 +182,10 @@ test("per-agent gpt-5.5 model flows from create through prompt_async", async (t)
   assert.equal(sent.agent, agentId);
   assert.deepEqual(sent.model, { providerID: "litellm", modelID: "gpt-5.5" });
   assert.deepEqual(sent.parts, [{ type: "text", text: "Say hello." }]);
+  assert.deepEqual(calls.ocFetch.map((c) => c.path).slice(-2), [
+    "/event",
+    "/session/ses_test/prompt_async",
+  ]);
 });
 
 test("litellm/gpt-5.5 keeps its explicit provider split end to end", async (t) => {
@@ -182,4 +219,116 @@ test("POST /v1/sessions rejects an unknown agent", async (t) => {
   const session = await req(base, "POST", "/v1/sessions", { agent: "agt_missing" });
   assert.equal(session.status, 400);
   assert.match(session.json.error, /unknown agent/);
+});
+
+test("GET /v1/sessions/:id/events returns flat replay events with type", async (t) => {
+  const rawEvents = [
+    {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "ses_test",
+        messageID: "msg_1",
+        partID: "part_1",
+        delta: { text: "hello" },
+      },
+    },
+    {
+      type: "session.status",
+      properties: {
+        sessionID: "ses_test",
+        status: { type: "idle" },
+      },
+    },
+  ];
+  const { app } = buildHarness({ eventStreams: [rawEvents] });
+  const { base, close } = await listen(app);
+  t.after(() => close());
+
+  const created = await req(base, "POST", "/v1/agents", {
+    name: "Replay",
+    model: "gpt-5.5",
+  });
+  await req(base, "POST", "/v1/sessions", { agent: created.json.id });
+  const sent = await req(base, "POST", "/v1/sessions/ses_test/events", {
+    events: [{ type: "user.message", content: "hi" }],
+  });
+  assert.equal(sent.status, 202);
+
+  const history = await req(base, "GET", "/v1/sessions/ses_test/events");
+  assert.equal(history.status, 200);
+  assert.deepEqual(history.json.data.map((e) => e.type), [
+    "user.message",
+    "agent.message",
+    "session.status_idle",
+  ]);
+  assert.equal(history.json.data[1].content[0].text, "hello");
+  assert.equal("event" in history.json.data[0], false);
+  assert.equal("data" in history.json.data[0], false);
+});
+
+test("POST /v1/sessions/:id/events rejects when background capture cannot start", async (t) => {
+  const { app, calls } = buildHarness({
+    eventResponse: () => fakeSse([], { ok: false, status: 503 }),
+  });
+  const { base, close } = await listen(app);
+  t.after(() => close());
+
+  const created = await req(base, "POST", "/v1/agents", {
+    name: "Capture failure",
+    model: "gpt-5.5",
+  });
+  await req(base, "POST", "/v1/sessions", { agent: created.json.id });
+  const sent = await req(base, "POST", "/v1/sessions/ses_test/events", {
+    events: [{ type: "user.message", content: "hi" }],
+  });
+
+  assert.equal(sent.status, 502);
+  assert.match(sent.json.error, /opencode \/event unavailable/);
+  assert.equal(calls.ocFetch.some((c) => c.path.endsWith("/prompt_async")), false);
+
+  const history = await req(base, "GET", "/v1/sessions/ses_test/events");
+  assert.deepEqual(history.json.data.map((e) => e.type), ["session.error"]);
+});
+
+test("background capture and live stream dedupe no-id events", async (t) => {
+  const rawEvents = [
+    {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "ses_test",
+        messageID: "msg_1",
+        partID: "part_1",
+        delta: { text: "same" },
+      },
+    },
+    {
+      type: "session.status",
+      properties: {
+        status: { type: "idle" },
+      },
+    },
+  ];
+  const { app } = buildHarness({ eventStreams: [rawEvents, rawEvents] });
+  const { base, close } = await listen(app);
+  t.after(() => close());
+
+  const created = await req(base, "POST", "/v1/agents", {
+    name: "Dedupe",
+    model: "gpt-5.5",
+  });
+  await req(base, "POST", "/v1/sessions", { agent: created.json.id });
+  const sent = await req(base, "POST", "/v1/sessions/ses_test/events", {
+    events: [{ type: "user.message", content: "hi" }],
+  });
+  assert.equal(sent.status, 202);
+
+  const stream = await fetch(base + "/v1/sessions/ses_test/events/stream");
+  assert.equal(stream.status, 200);
+  const streamText = await stream.text();
+  assert.match(streamText, /event: agent\.message/);
+  assert.match(streamText, /event: session\.status_idle/);
+
+  const history = await req(base, "GET", "/v1/sessions/ses_test/events");
+  const types = history.json.data.map((e) => e.type);
+  assert.deepEqual(types, ["user.message", "agent.message", "session.status_idle"]);
 });

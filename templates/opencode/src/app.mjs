@@ -67,12 +67,137 @@ export function createApp({
       else try { res.end(); } catch {}
     });
 
+  const activeTurns = new Map();
 
-  function startCaptureLoop(sessionId, model) {
-    (async () => {
+  function rawSessionId(raw) {
+    return (
+      raw?.properties?.sessionID ??
+      raw?.sessionID ??
+      raw?.properties?.session_id ??
+      raw?.properties?.info?.sessionID ??
+      raw?.properties?.part?.sessionID ??
+      raw?.properties?.message?.sessionID ??
+      null
+    );
+  }
+
+  function stableJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+    if (value && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  function eventKey(raw, out, turnId) {
+    const props = raw?.properties || raw || {};
+    if (props.id != null) return `raw:${props.id}`;
+
+    const data = out?.data || {};
+    if (data.id != null) return `${out.event}:id:${data.id}`;
+    if (data.messageID != null || data.partID != null) {
+      return `${out.event}:message:${data.messageID || ""}:part:${data.partID || ""}:${stableJson(data)}`;
+    }
+    if (data.tool_use_id != null) return `${out.event}:tool:${data.tool_use_id}:${stableJson(data)}`;
+
+    const sid = rawSessionId(raw) || data.sessionID || "";
+    if (turnId) return `turn:${turnId}:${out.event}:${stableJson(data)}`;
+    if (sid) return `session:${sid}:${out.event}:${stableJson(data)}`;
+    return `${out.event}:${stableJson(data)}`;
+  }
+
+  function replayEvent(stored) {
+    return { type: stored.event, ...(stored.data || {}) };
+  }
+
+  function terminalEvent(event) {
+    return event === "session.status_idle" || event === "session.error";
+  }
+
+  function shouldPersistEvent(sessionId, turnId, raw, out) {
+    const sid = rawSessionId(raw);
+    if (sid != null) return sid === sessionId;
+    if (!out?.event?.startsWith("session.")) return true;
+
+    const turn = activeTurns.get(sessionId);
+    if (!turn || turn.id !== turnId) return false;
+    return Array.from(activeTurns.values()).filter((t) => !t.terminal).length <= 1;
+  }
+
+  function persistEvent(sessionId, raw, out, turnId) {
+    if (!shouldPersistEvent(sessionId, turnId, raw, out)) return false;
+    store.insertSessionEvent(sessionId, out, eventKey(raw, out, turnId));
+    if (terminalEvent(out.event)) {
+      const turn = activeTurns.get(sessionId);
+      if (turn?.id === turnId) turn.terminal = true;
+    }
+    return true;
+  }
+
+  function captureFailure(sessionId, turnId, message) {
+    const out = { event: "session.error", data: { error: { message } } };
+    store.insertSessionEvent(sessionId, out, `turn:${turnId}:capture-error:${message}`);
+    const turn = activeTurns.get(sessionId);
+    if (turn?.id === turnId) turn.terminal = true;
+  }
+
+  function parseSseData(block) {
+    return block
+      .split("\n")
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => l.slice(5).trim())
+      .join("");
+  }
+
+  function startCaptureLoop(sessionId, model, turnId) {
+    const controller = new AbortController();
+    let released = false;
+    let readySettled = false;
+    let resolveReady;
+    let rejectReady;
+    const pending = [];
+    const ready = new Promise((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+
+    const queueOrPersist = (raw, out) => {
+      if (!released) {
+        pending.push({ raw, out });
+        return false;
+      }
+      return persistEvent(sessionId, raw, out, turnId);
+    };
+
+    const release = () => {
+      if (released) return;
+      released = true;
+      let releasedTerminal = false;
+      for (const item of pending.splice(0)) {
+        if (persistEvent(sessionId, item.raw, item.out, turnId) && terminalEvent(item.out.event)) {
+          releasedTerminal = true;
+        }
+      }
+      if (releasedTerminal) controller.abort();
+    };
+
+    const settleReady = (err) => {
+      if (readySettled) return;
+      readySettled = true;
+      if (err) rejectReady(err);
+      else resolveReady();
+    };
+
+    const done = (async () => {
       try {
-        const upstream = await ocFetch(await ocBase(), "/event", {});
-        if (!upstream.ok || !upstream.body) return;
+        const upstream = await ocFetch(await ocBase(), "/event", { signal: controller.signal });
+        if (!upstream.ok || !upstream.body) {
+          const message = `opencode /event unavailable (${upstream.status || "no body"})`;
+          captureFailure(sessionId, turnId, message);
+          settleReady(new Error(message));
+          return;
+        }
+        settleReady();
         const decoder = new TextDecoder();
         let buffer = "";
         for await (const chunk of upstream.body) {
@@ -81,28 +206,32 @@ export function createApp({
           while ((idx = buffer.indexOf("\n\n")) !== -1) {
             const block = buffer.slice(0, idx);
             buffer = buffer.slice(idx + 2);
-            const data = block
-              .split("\n")
-              .filter((l) => l.startsWith("data:"))
-              .map((l) => l.slice(5).trim())
-              .join("");
+            const data = parseSseData(block);
             if (!data) continue;
             let ev;
             try { ev = JSON.parse(data); } catch { continue; }
             const out = translateOpencodeEvent(ev, { sessionId, model });
             if (!out) continue;
-            const props = ev.properties || ev;
-            const eventId = props.id ?? null;
-            store.insertSessionEvent(sessionId, out, eventId);
-            if (out.event === "session.status_idle" || out.event === "session.error") return;
+            const persisted = queueOrPersist(ev, out);
+            if (persisted && terminalEvent(out.event)) return;
           }
         }
       } catch (err) {
-        if (err?.name !== "AbortError") {
+        if (err?.name !== "AbortError" && !controller.signal.aborted) {
+          const message = err?.message || "opencode event capture failed";
+          captureFailure(sessionId, turnId, message);
+          settleReady(new Error(message));
           console.error(`[capture] ${sessionId}:`, err.message);
         }
       }
     })();
+
+    return {
+      ready,
+      release,
+      stop: () => controller.abort(),
+      done,
+    };
   }
 
   // ---- agents -------------------------------------------------------------
@@ -233,6 +362,16 @@ export function createApp({
     const parts = partsFromEvents(req.body?.events || []);
     if (!parts.length) return res.status(400).json({ error: "no user.message parts" });
 
+    const turnId = "turn_" + crypto.randomBytes(12).toString("hex");
+    activeTurns.set(req.params.id, { id: turnId, terminal: false });
+    const capture = startCaptureLoop(req.params.id, agent?.model || null, turnId);
+    try {
+      await capture.ready;
+    } catch (err) {
+      capture.stop();
+      return res.status(502).json({ error: err?.message || "opencode event capture unavailable" });
+    }
+
     const r = await ocFetch(await ocBase(), `/session/${req.params.id}/prompt_async`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -251,13 +390,11 @@ export function createApp({
         .json({ error: `opencode prompt failed (${r.status})`, detail: detail.slice(0, 500) });
     }
 
-    const userEventId = "usr_" + crypto.randomBytes(12).toString("hex");
     store.insertSessionEvent(req.params.id, {
       event: "user.message",
       data: { content: parts },
-    }, userEventId);
-
-    startCaptureLoop(req.params.id, agent?.model || null);
+    }, `user:${turnId}`);
+    capture.release();
 
     res.status(202).json({ ok: true });
   }));
@@ -273,7 +410,7 @@ export function createApp({
   }));
 
   app.get("/v1/sessions/:id/events", wrap(async (req, res) => {
-    res.json({ data: store.listSessionEvents(req.params.id) });
+    res.json({ data: store.listSessionEvents(req.params.id).map(replayEvent) });
   }));
 
   // Live SSE stream: opencode events -> Anthropic event shapes.
@@ -330,9 +467,8 @@ export function createApp({
 
           const out = translateOpencodeEvent(ev, { sessionId: req.params.id, model });
           if (out && out.event) {
-            const props2 = ev.properties || ev;
-            const eventId2 = props2.id ?? null;
-            store.insertSessionEvent(req.params.id, out, eventId2);
+            const turnId = activeTurns.get(req.params.id)?.id || null;
+            persistEvent(req.params.id, ev, out, turnId);
             res.write(`event: ${out.event}\ndata: ${JSON.stringify(out.data)}\n\n`);
           }
         }
