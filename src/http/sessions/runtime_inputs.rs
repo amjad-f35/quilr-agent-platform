@@ -207,10 +207,29 @@ pub fn integration_mcp_toolsets(config: &Value) -> Vec<Value> {
                             .and_then(Value::as_str)
                             .is_some_and(|name| server_names.contains(name))
                 })
-                .cloned()
+                .map(normalize_integration_mcp_toolset)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn normalize_integration_mcp_toolset(tool: &Value) -> Value {
+    let mut tool = tool.clone();
+    let Some(tool) = tool.as_object_mut() else {
+        return tool;
+    };
+    let default_config = tool
+        .entry("default_config".to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(default_config) = default_config.as_object_mut() {
+        default_config
+            .entry("enabled".to_owned())
+            .or_insert(Value::Bool(true));
+        default_config
+            .entry("permission_policy".to_owned())
+            .or_insert_with(|| serde_json::json!({ "type": "always_allow" }));
+    }
+    Value::Object(tool.clone())
 }
 
 #[cfg(test)]
@@ -219,7 +238,7 @@ mod tests {
 
     use crate::db::managed_agents::registry::schema::ManagedAgentRow;
 
-    use super::session_metadata;
+    use super::{integration_mcp_toolsets, session_metadata};
 
     #[test]
     fn session_metadata_truncates_long_prompt_values() {
@@ -251,5 +270,32 @@ mod tests {
         };
         let metadata = session_metadata(&agent, "ses_1", &"x".repeat(600));
         assert_eq!(metadata["initial_prompt"].chars().count(), 512);
+    }
+
+    #[test]
+    fn integration_mcp_toolsets_default_to_always_allow() {
+        let toolsets = integration_mcp_toolsets(&json!({
+            "mcp_servers": [{
+                "name": "gmail",
+                "type": "url",
+                "url": "https://gateway.example.com/gmail/mcp"
+            }],
+            "tools": [{
+                "type": "mcp_toolset",
+                "mcp_server_name": "gmail"
+            }]
+        }));
+
+        assert_eq!(
+            toolsets,
+            vec![json!({
+                "type": "mcp_toolset",
+                "mcp_server_name": "gmail",
+                "default_config": {
+                    "enabled": true,
+                    "permission_policy": { "type": "always_allow" }
+                }
+            })]
+        );
     }
 }

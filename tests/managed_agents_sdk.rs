@@ -33,7 +33,10 @@ async fn claude_agent_create_strips_mcp_server_auth_from_agent_definition() {
     Mock::given(method("POST"))
         .and(path("/v1/agents"))
         .and(header("x-api-key", "sk-ant-test"))
-        .and(header("anthropic-beta", litellm_rust::sdk::agents::MANAGED_AGENTS_BETA))
+        .and(header(
+            "anthropic-beta",
+            litellm_rust::sdk::agents::MANAGED_AGENTS_BETA,
+        ))
         .and(body_json(json!({
             "name": "MCP Assistant",
             "model": "claude-opus-4-8",

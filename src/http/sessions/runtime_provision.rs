@@ -15,7 +15,7 @@ use crate::{
 };
 
 mod gemini;
-mod platform_mcp;
+mod mcp_vault;
 
 use super::{
     runtime::CreatedRuntimeSession,
@@ -41,12 +41,15 @@ pub(super) async fn provision_runtime_session(
 ) -> Result<SessionRow, GatewayError> {
     let sdk_rt = created.resolved.agent_runtime;
     let client = runtime_client(state, created);
+    let provider_mcp_servers = mcp_servers(state, &created.agent, Some(&created.row.id))?;
     let provider_agent = match gemini::reusable_provider_agent(pool, sdk_rt, created).await? {
         Some(agent) => agent,
-        None => create_provider_agent(state, &client, sdk_rt, created).await?,
+        None => {
+            create_provider_agent(&client, sdk_rt, created, provider_mcp_servers.clone()).await?
+        }
     };
     let provider_env = create_provider_environment(&client, sdk_rt, created).await?;
-    let vault_ids = platform_mcp::vault_ids(state, created).await?;
+    let vault_ids = mcp_vault::vault_ids(state, pool, created, &provider_mcp_servers).await?;
     let provider_session = client
         .beta()
         .sessions()
@@ -117,10 +120,10 @@ fn runtime_client(state: &AppState, created: &CreatedRuntimeSession) -> Lap {
 }
 
 async fn create_provider_agent(
-    state: &AppState,
     client: &Lap,
     runtime: AgentRuntime,
     created: &CreatedRuntimeSession,
+    mcp_servers: Vec<Value>,
 ) -> Result<crate::sdk::agents::ManagedAgent, GatewayError> {
     client
         .beta()
@@ -136,7 +139,7 @@ async fn create_provider_agent(
             system: provider_system(runtime, created),
             description: created.agent.description.clone(),
             tools: gemini::provider_tools(runtime, created),
-            mcp_servers: mcp_servers(state, &created.agent, Some(&created.row.id))?,
+            mcp_servers,
             workspace: workspace_from_env(&created.environment)?,
             env_vars: None,
             metadata: Some(agent_metadata(&created.agent)),

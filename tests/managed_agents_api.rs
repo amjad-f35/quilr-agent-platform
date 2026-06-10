@@ -3,6 +3,10 @@ mod support;
 
 use serde_json::{json, Value};
 use support::{flows, request_json, request_json_raw, AppFixture};
+use wiremock::{
+    matchers::{header, method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
 static DB_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -200,6 +204,184 @@ async fn runtime_agent_create_preserves_tool_config_against_postgres() {
     assert_eq!(normalized_config["config"]["tools"], json!([]));
 }
 
+#[tokio::test]
+async fn claude_runtime_session_reuses_gateway_mcp_vault_against_postgres() {
+    let _guard = DB_TEST_LOCK.lock().await;
+    let Some(fixture) = AppFixture::new().await else {
+        eprintln!("skipping managed agent integration test: TEST_DATABASE_URL is not set");
+        return;
+    };
+
+    let anthropic = mock_anthropic_runtime_for_mcp_vault().await;
+    request_json(
+        fixture.app.clone(),
+        "POST",
+        "/api/providers/anthropic",
+        Some(json!({
+            "api_key": "anthropic-test",
+            "api_base": anthropic.uri()
+        })),
+    )
+    .await;
+    let agent = create_test_agent(
+        &fixture,
+        json!({
+            "name": "gmail-vault-agent",
+            "owner_id": "user-1",
+            "runtime": "claude_managed_agents",
+            "model": "claude-sonnet-4-6",
+            "system": "Use Gmail MCP tools.",
+            "tools": [{
+                "type": "mcp_toolset",
+                "mcp_server_name": "mcp_gmail"
+            }],
+            "config": {
+                "runtime": "claude_managed_agents",
+                "mcp_servers": [{
+                    "name": "mcp_gmail",
+                    "type": "url",
+                    "url": "https://backend.composio.dev/v3/mcp/${COMPOSIO_MCP_SERVER_ID}/mcp?user_id=${COMPOSIO_USER_ID}"
+                }]
+            }
+        }),
+    )
+    .await;
+    let agent_id = agent["id"].as_str().unwrap();
+
+    create_idle_runtime_session(&fixture, agent_id, "first").await;
+    create_idle_runtime_session(&fixture, agent_id, "second").await;
+
+    let requests = anthropic.received_requests().await.unwrap();
+    let agent_bodies = request_bodies(&requests, "/v1/agents");
+    assert_eq!(agent_bodies.len(), 2);
+    let agent_mcp_servers = &agent_bodies[0]["mcp_servers"];
+    assert_eq!(
+        *agent_mcp_servers,
+        json!([{
+            "name": "mcp_gmail",
+            "type": "url",
+            "url": "http://localhost/mcp_gmail/mcp"
+        }])
+    );
+    assert!(
+        agent_mcp_servers[0].get("authorization_token").is_none(),
+        "provider agent body must not include MCP proxy auth"
+    );
+    let gmail_toolset = agent_bodies[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool.get("mcp_server_name").and_then(Value::as_str) == Some("mcp_gmail"))
+        .unwrap();
+    assert_eq!(
+        gmail_toolset["default_config"]["permission_policy"],
+        json!({ "type": "always_allow" })
+    );
+
+    let credential_bodies = request_bodies(
+        &requests,
+        "/v1/vaults/vault_111111111111111111111111/credentials",
+    );
+    assert_eq!(credential_bodies.len(), 1);
+    assert_eq!(
+        credential_bodies[0]["auth"],
+        json!({
+            "type": "static_bearer",
+            "mcp_server_url": "http://localhost/mcp_gmail/mcp",
+            "token": "sk-local"
+        })
+    );
+
+    let session_bodies = request_bodies(&requests, "/v1/sessions");
+    assert_eq!(session_bodies.len(), 2);
+    assert_eq!(
+        session_bodies[0]["vault_ids"],
+        json!(["vault_111111111111111111111111"])
+    );
+    assert_eq!(
+        session_bodies[1]["vault_ids"],
+        json!(["vault_111111111111111111111111"])
+    );
+    assert_eq!(count_requests(&requests, "/v1/vaults"), 1);
+}
+
 async fn create_test_agent(fixture: &AppFixture, body: Value) -> Value {
     request_json(fixture.app.clone(), "POST", "/api/agents", Some(body)).await
+}
+
+async fn create_idle_runtime_session(fixture: &AppFixture, agent_id: &str, title: &str) -> Value {
+    request_json(
+        fixture.app.clone(),
+        "POST",
+        "/session",
+        Some(json!({
+            "agent": agent_id,
+            "agent_id": agent_id,
+            "runtime": "claude_managed_agents",
+            "title": title
+        })),
+    )
+    .await
+}
+
+async fn mock_anthropic_runtime_for_mcp_vault() -> MockServer {
+    let anthropic = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/agents"))
+        .and(header("x-api-key", "anthropic-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "ag_111111111111111111111111"
+        })))
+        .mount(&anthropic)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/environments"))
+        .and(header("x-api-key", "anthropic-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "env_111111111111111111111111"
+        })))
+        .mount(&anthropic)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/vaults"))
+        .and(header("x-api-key", "anthropic-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "vault_111111111111111111111111"
+        })))
+        .mount(&anthropic)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/v1/vaults/vault_111111111111111111111111/credentials",
+        ))
+        .and(header("x-api-key", "anthropic-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "vcred_111111111111111111111111"
+        })))
+        .mount(&anthropic)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/sessions"))
+        .and(header("x-api-key", "anthropic-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "sesn_111111111111111111111111"
+        })))
+        .mount(&anthropic)
+        .await;
+    anthropic
+}
+
+fn request_bodies(requests: &[wiremock::Request], request_path: &str) -> Vec<Value> {
+    requests
+        .iter()
+        .filter(|request| request.url.path() == request_path)
+        .map(|request| serde_json::from_slice(&request.body).unwrap())
+        .collect()
+}
+
+fn count_requests(requests: &[wiremock::Request], request_path: &str) -> usize {
+    requests
+        .iter()
+        .filter(|request| request.url.path() == request_path)
+        .count()
 }

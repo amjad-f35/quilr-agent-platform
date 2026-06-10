@@ -10,9 +10,11 @@ use crate::{errors::GatewayError, proxy::state::AppState};
 /// rewritten to route through this gateway's own MCP proxy
 /// (`{proxy_base}/{name}/mcp`), which resolves the caller's vault variables,
 /// injects the server's static headers, and forwards upstream — the same path
-/// tool discovery already uses. The proxy requires a gateway key, supplied as
-/// the entry's `authorization_token` (mirrors the platform-MCP auth pattern).
-/// `name` is the server id; the dynamic proxy resolves it by id, name, or alias.
+/// tool discovery already uses. The proxy requires a gateway key, tracked on
+/// the entry as `authorization_token` so runtime session provisioning can seed
+/// the provider's MCP credential vault. Provider adapters strip this field from
+/// the agent definition body. `name` is the server id; the dynamic proxy
+/// resolves it by id, name, or alias.
 ///
 /// v0: on-behalf-of identity is the default owner. Per-user identity over this
 /// path is tracked separately (signed-token auth) — see issue.
