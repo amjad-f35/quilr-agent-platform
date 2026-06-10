@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -710,6 +710,7 @@ export default function RuntimesPage() {
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+  const hasLoadedHarnessesRef = useRef(false);
 
   const applyHarnesses = useCallback((next: RuntimeHarness[]) => {
     const resolved = next ?? [];
@@ -721,20 +722,29 @@ export default function RuntimesPage() {
     );
   }, []);
 
-  const refresh = useCallback(async () => {
-    const next = await listRuntimeHarnesses();
-    setError(null);
-    applyHarnesses(next ?? []);
-  }, [applyHarnesses]);
-
   useEffect(() => {
-    refresh()
-      .catch((err) => {
-        setError(runtimeLoadError(err));
-        applyHarnesses(FALLBACK_DEFAULT_RUNTIMES);
+    let cancelled = false;
+    listRuntimeHarnesses()
+      .then((next) => {
+        if (cancelled) return;
+        hasLoadedHarnessesRef.current = true;
+        setError(null);
+        applyHarnesses(next ?? []);
       })
-      .finally(() => setLoading(false));
-  }, [applyHarnesses, refresh]);
+      .catch((err) => {
+        if (cancelled) return;
+        setError(runtimeLoadError(err));
+        if (!hasLoadedHarnessesRef.current) {
+          applyHarnesses(FALLBACK_DEFAULT_RUNTIMES);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyHarnesses]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -779,7 +789,12 @@ export default function RuntimesPage() {
   useEffect(() => {
     if (!pendingTemplateId || templatesLoading) return;
     const template = runtimeTemplateById(pendingTemplateId, runtimeTemplates);
-    if (!template) return;
+    if (!template) {
+      const message = `Runtime template "${pendingTemplateId}" was not found. Showing available templates.`;
+      setTemplatesError((current) => (current ? `${current} ${message}` : message));
+      setPendingTemplateId(null);
+      return;
+    }
     setSelectedTemplate(template);
     setShowAdd(true);
     setPendingTemplateId(null);
