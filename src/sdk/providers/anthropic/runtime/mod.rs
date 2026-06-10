@@ -162,6 +162,7 @@ fn create_agent_body(params: CreateAgentParams) -> Result<Value, AgentSdkError> 
     let options = params.lap_provider_options.clone();
     let metadata = params.metadata.clone();
     let mut body = serde_json::to_value(params)?;
+    normalize_mcp_servers(&mut body);
     if let Some(metadata) = metadata {
         if let Some(body) = body.as_object_mut() {
             body.insert("metadata".to_owned(), serde_json::to_value(metadata)?);
@@ -176,6 +177,18 @@ fn create_agent_body(params: CreateAgentParams) -> Result<Value, AgentSdkError> 
         }
     }
     Ok(body)
+}
+
+fn normalize_mcp_servers(body: &mut Value) {
+    let Some(servers) = body.get_mut("mcp_servers").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for server in servers {
+        let Value::Object(server) = server else {
+            continue;
+        };
+        server.retain(|key, _| matches!(key.as_str(), "type" | "name" | "url"));
+    }
 }
 
 fn provider_session_id(client: &Lap, session_id: &str) -> Result<String, AgentSdkError> {
