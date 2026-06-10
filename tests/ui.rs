@@ -25,20 +25,22 @@ async fn serves_static_ui() {
     let app = router(build_state(&test_config()));
 
     assert_redirects_to_sessions(app.clone()).await;
-    assert_redirects_inbox_item_deep_link(app.clone()).await;
     assert_serves_sessions_html(app.clone()).await;
+    assert_serves_inbox_rsc_payload(app.clone()).await;
     assert_serves_spa_deep_links(app).await;
 }
 
 fn write_ui_fixture() -> TempDir {
     let ui_dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(ui_dir.path().join("sessions")).unwrap();
+    fs::create_dir_all(ui_dir.path().join("inbox")).unwrap();
     fs::write(ui_dir.path().join("index.html"), "<html>app shell</html>").unwrap();
     fs::write(
         ui_dir.path().join("sessions/index.html"),
         "<html>sessions</html>",
     )
     .unwrap();
+    fs::write(ui_dir.path().join("inbox/index.txt"), "inbox rsc").unwrap();
     fs::write(ui_dir.path().join("404.html"), "<html>not found</html>").unwrap();
     ui_dir
 }
@@ -52,20 +54,18 @@ async fn assert_redirects_to_sessions(app: axum::Router) {
     );
 }
 
-async fn assert_redirects_inbox_item_deep_link(app: axum::Router) {
-    let response = get(app, "/inbox/appr_123/").await;
-    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-    assert_eq!(
-        response.headers().get(header::LOCATION).unwrap(),
-        "/inbox/?item=appr_123"
-    );
-}
-
 async fn assert_serves_sessions_html(app: axum::Router) {
     let response = get(app, "/sessions/").await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     assert!(std::str::from_utf8(&body).unwrap().contains("sessions"));
+}
+
+async fn assert_serves_inbox_rsc_payload(app: axum::Router) {
+    let response = get(app, "/inbox/index.txt").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024).await.unwrap();
+    assert!(std::str::from_utf8(&body).unwrap().contains("inbox rsc"));
 }
 
 async fn assert_serves_spa_deep_links(app: axum::Router) {
