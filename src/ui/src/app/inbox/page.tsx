@@ -124,10 +124,15 @@ function EmptyState({ tab }: { tab: InboxFilter }) {
   );
 }
 
+function inboxItemIdParam(value: string | null): string | null {
+  if (!value) return null;
+  return value.startsWith("appr_") || value.startsWith("iss_") ? value : null;
+}
+
 function InboxInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const requestedItemId = searchParams.get("item");
+  const requestedItemId = inboxItemIdParam(searchParams.get("item"));
   const [tab, setTab] = useState<InboxFilter>(() => (requestedItemId ? "all" : "attention"));
   const [items, setItems] = useState<InboxItem[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
