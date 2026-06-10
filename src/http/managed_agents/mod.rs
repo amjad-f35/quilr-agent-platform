@@ -1,5 +1,6 @@
 pub mod files;
 pub mod import;
+mod import_existing;
 mod import_types;
 pub mod inbox;
 pub mod memory;

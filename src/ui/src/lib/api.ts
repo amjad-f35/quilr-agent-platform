@@ -375,7 +375,16 @@ export interface ExternalAgent {
   description?: string | null;
   model?: string | null;
   provider: string;
+  imported_agent_id?: string | null;
   raw: Record<string, unknown>;
+}
+
+export interface ImportProviderAgentsResult {
+  agents: Agent[];
+  skippedAgents: Array<{
+    externalId: string;
+    existingAgentId: string;
+  }>;
 }
 
 export async function discoverProviderAgents(input: {
@@ -408,7 +417,7 @@ export async function importProviderAgents(input: {
     model?: string | null;
     raw?: Record<string, unknown>;
   }>;
-}): Promise<Agent[]> {
+}): Promise<ImportProviderAgentsResult> {
   const res = await req(`/api/agents/import/${encodeURIComponent(input.providerId)}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -426,8 +435,17 @@ export async function importProviderAgents(input: {
       })),
     }),
   });
-  const data = await jsonOrThrow<{ agents: Agent[] }>(res);
-  return data.agents;
+  const data = await jsonOrThrow<{
+    agents: Agent[];
+    skipped_agents?: Array<{ external_id: string; existing_agent_id: string }>;
+  }>(res);
+  return {
+    agents: data.agents,
+    skippedAgents: (data.skipped_agents ?? []).map((agent) => ({
+      externalId: agent.external_id,
+      existingAgentId: agent.existing_agent_id,
+    })),
+  };
 }
 
 export type ProviderCategory = "model" | "runtime";

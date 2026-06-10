@@ -13,10 +13,11 @@ use crate::{
         managed_agents::registry::{repository, schema::CreateManagedAgent},
     },
     errors::GatewayError,
+    http::managed_agents::import_existing,
     http::managed_agents::import_types::{
-        provider_error, CredentialMode, DiscoverAgentsRequest, DiscoverAgentsResponse,
-        ExternalAgent, ImportAgent, ImportAgentsRequest, ImportAgentsResponse,
-        ImportProviderResponse,
+        mark_existing_import, provider_error, CredentialMode, DiscoverAgentsRequest,
+        DiscoverAgentsResponse, ExternalAgent, ImportAgent, ImportAgentsRequest,
+        ImportAgentsResponse, ImportProviderResponse, SkippedImportAgent,
     },
     proxy::{auth::master_key::require_any_gateway_key, credential_crypto, state::AppState},
     sdk::providers::{
@@ -32,6 +33,8 @@ pub async fn discover(
 ) -> Result<Json<DiscoverAgentsResponse>, GatewayError> {
     require_any_gateway_key(&headers, &state)?;
     let provider = provider_for_id(&provider_id)?;
+    let pool = state.db.as_ref().ok_or(GatewayError::MissingDatabase)?;
+    let existing = import_existing::imported_agent_ids(pool, provider.id()).await?;
     let endpoint = normalize_endpoint(&input.endpoint)?;
     let agents = provider
         .discover(&state.http, &endpoint, input.api_key.trim())
@@ -39,6 +42,7 @@ pub async fn discover(
         .map_err(provider_error)?
         .into_iter()
         .map(ExternalAgent::from)
+        .map(|agent| mark_existing_import(agent, &existing))
         .collect();
     Ok(Json(DiscoverAgentsResponse { agents }))
 }
@@ -61,9 +65,19 @@ pub async fn import(
     let owner_id = owner_id(&input).to_owned();
     let api_key = input.api_key.as_deref().map(str::trim);
     let credential_mode = input.credential_mode;
+    let mut existing = import_existing::imported_agent_ids(pool, provider.id()).await?;
 
     let mut rows = Vec::with_capacity(input.agents.len());
+    let mut skipped_agents = Vec::new();
     for agent in input.agents {
+        if let Some(existing_agent_id) = existing.get(&agent.external_id) {
+            skipped_agents.push(SkippedImportAgent {
+                external_id: agent.external_id,
+                existing_agent_id: existing_agent_id.clone(),
+            });
+            continue;
+        }
+        let external_id = agent.external_id.clone();
         rows.push(
             repository::create(
                 pool,
@@ -80,11 +94,16 @@ pub async fn import(
             )
             .await?,
         );
+        let created_id = rows.last().map(|row| row.id.clone()).unwrap_or_default();
+        existing.insert(external_id, created_id);
     }
 
     Ok((
         StatusCode::CREATED,
-        Json(ImportAgentsResponse { agents: rows }),
+        Json(ImportAgentsResponse {
+            agents: rows,
+            skipped_agents,
+        }),
     ))
 }
 
@@ -106,7 +125,7 @@ fn provider_registry() -> Vec<&'static dyn ImportAgentsProvider> {
 fn provider_for_id(provider_id: &str) -> Result<&'static dyn ImportAgentsProvider, GatewayError> {
     provider_registry()
         .into_iter()
-        .find(|provider| provider.id() == provider_id)
+        .find(|provider| provider.id() == provider_id || provider.api_spec() == provider_id)
         .ok_or_else(|| GatewayError::NotFound(format!("import provider not found: {provider_id}")))
 }
 
@@ -127,7 +146,7 @@ async fn create_input(
         name: agent_name(&agent).to_owned(),
         owner_id: owner_id.to_owned(),
         description: agent.description.clone(),
-        runtime: Some(provider.id().to_owned()),
+        runtime: Some(provider.api_spec().to_owned()),
         harness: Some("claude-code".to_owned()),
         prompt: Some(system.clone()),
         tools: Some(json!([])),

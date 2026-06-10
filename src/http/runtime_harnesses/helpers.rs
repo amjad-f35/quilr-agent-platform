@@ -84,7 +84,10 @@ async fn custom_harnesses(
 
 fn append_import_providers(result: &mut Vec<HarnessResponse>) {
     for provider in import_runtime_providers() {
-        if result.iter().any(|harness| harness.alias == provider.id) {
+        if result
+            .iter()
+            .any(|harness| harness.alias == provider.id || harness.api_spec == provider.api_spec)
+        {
             continue;
         }
         result.push(HarnessResponse {

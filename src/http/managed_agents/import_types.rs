@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -32,6 +34,7 @@ pub struct ExternalAgent {
     pub description: Option<String>,
     pub model: Option<String>,
     pub provider: String,
+    pub imported_agent_id: Option<String>,
     pub raw: Value,
 }
 
@@ -72,6 +75,13 @@ pub struct ImportAgent {
 #[derive(Debug, Serialize)]
 pub struct ImportAgentsResponse {
     pub agents: Vec<ManagedAgentRow>,
+    pub skipped_agents: Vec<SkippedImportAgent>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkippedImportAgent {
+    pub external_id: String,
+    pub existing_agent_id: String,
 }
 
 pub(crate) fn provider_error(error: ImportAgentsError) -> GatewayError {
@@ -84,6 +94,14 @@ pub(crate) fn provider_error(error: ImportAgentsError) -> GatewayError {
     }
 }
 
+pub(crate) fn mark_existing_import(
+    mut agent: ExternalAgent,
+    existing: &HashMap<String, String>,
+) -> ExternalAgent {
+    agent.imported_agent_id = existing.get(&agent.id).cloned();
+    agent
+}
+
 impl From<ImportedAgent> for ExternalAgent {
     fn from(agent: ImportedAgent) -> Self {
         Self {
@@ -92,6 +110,7 @@ impl From<ImportedAgent> for ExternalAgent {
             description: agent.description,
             model: agent.model,
             provider: agent.provider,
+            imported_agent_id: None,
             raw: agent.raw,
         }
     }

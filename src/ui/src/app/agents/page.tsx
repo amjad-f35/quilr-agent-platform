@@ -412,6 +412,7 @@ export default function AgentsPage() {
                 : source?.credential_mode === "shared"
                   ? "Shared key"
                   : null;
+              const sourceLabel = source ? `Imported from ${providerLabel(source.provider)}` : "Built in LAP";
               return (
                 <Card
                   key={String(ag.id)}
@@ -426,6 +427,9 @@ export default function AgentsPage() {
                     )}
                     <span className="font-mono text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">
                       {source ? providerLabel(source.provider) : runtimeName(runtimeFromAgent(ag))}
+                    </span>
+                    <span className="font-mono text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">
+                      {sourceLabel}
                     </span>
                     {accessLabel && (
                       <span className="font-mono text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">
