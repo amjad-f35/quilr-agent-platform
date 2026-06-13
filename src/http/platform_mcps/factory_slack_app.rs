@@ -37,6 +37,7 @@ pub(crate) async fn create_child_slack_app(
     arguments: &Value,
     source_thread_ts: &str,
 ) -> Result<Value, GatewayError> {
+    let allowed_dm_user_ids = allowed_dm_user_ids(arguments)?;
     let token_key = app_config_token_key(&platform.id, config);
     let app_config_token = load_secret(state, &token_key).await?;
     let provider_id = provider_id_for(&child.id);
@@ -55,7 +56,7 @@ pub(crate) async fn create_child_slack_app(
         &provider_id,
         app_name,
         &created,
-        allowed_dm_user_ids(arguments),
+        allowed_dm_user_ids,
     )?;
     save_child_credentials(state, pool, &app).await?;
     let child = save_child_slack_app(pool, &child, app.config).await?;

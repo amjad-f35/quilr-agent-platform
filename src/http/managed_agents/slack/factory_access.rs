@@ -1,8 +1,9 @@
 use serde_json::{json, Value};
 
-use super::{types::SlackIncomingMessage, user_ids::normalize_slack_user_id};
-
-const INVALID_DM_ALLOWLIST_SENTINEL: &str = "__invalid_dm_allowlist__";
+use super::{
+    types::SlackIncomingMessage,
+    user_ids::{normalize_slack_user_id, INVALID_DM_ALLOWLIST_SENTINEL},
+};
 
 pub(super) fn auto_connect_arguments(child_id: &str, message: &SlackIncomingMessage) -> Value {
     json!({
@@ -34,19 +35,30 @@ fn requested_dm_allowlist(message: &SlackIncomingMessage) -> Vec<String> {
 
 fn dm_limit_requested(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
-    let names_dms = names_direct_messages(&lower);
-    let restricts = [
-        "only",
-        "limit",
-        "restrict",
-        "allowed",
-        "allowlist",
-        "whitelist",
-        "specific",
-    ]
-    .iter()
-    .any(|word| lower.contains(word));
-    names_dms && restricts
+    names_direct_messages(&lower) && has_dm_restriction_intent(&lower)
+}
+
+fn has_dm_restriction_intent(lower_prompt: &str) -> bool {
+    lower_prompt
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .any(|word| {
+            matches!(
+                word,
+                "only"
+                    | "limit"
+                    | "limited"
+                    | "limits"
+                    | "restrict"
+                    | "restricted"
+                    | "restricts"
+                    | "allowlist"
+                    | "allowlisted"
+                    | "whitelist"
+                    | "whitelisted"
+                    | "specific"
+            )
+        })
 }
 
 fn names_direct_messages(lower_prompt: &str) -> bool {
@@ -170,6 +182,21 @@ mod tests {
             arguments["allowed_dm_user_ids"],
             json!([INVALID_DM_ALLOWLIST_SENTINEL])
         );
+    }
+
+    #[test]
+    fn auto_connect_keeps_dms_open_for_general_allowed_phrases() {
+        let allowed = auto_connect_arguments(
+            "agent_child",
+            &message("create it with allowed DMs for everyone", Some("U999")),
+        );
+        let not_allowed = auto_connect_arguments(
+            "agent_child",
+            &message("create it; not allowed DMs are fine", Some("U999")),
+        );
+
+        assert_eq!(allowed["allowed_dm_user_ids"], json!([]));
+        assert_eq!(not_allowed["allowed_dm_user_ids"], json!([]));
     }
 
     #[test]
