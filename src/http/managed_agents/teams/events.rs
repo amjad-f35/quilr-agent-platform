@@ -8,17 +8,18 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::{
-    db::managed_agents::{registry::schema::ManagedAgentRow, sessions, teams},
+    db::managed_agents::{registry::schema::ManagedAgentRow, teams},
     errors::GatewayError,
-    http::sessions::create_runtime_session_for_agent,
+    http::sessions::create_runtime_session_for_agent_without_prompt,
     proxy::state::AppState,
+    sdk::agents::CLAUDE_MANAGED_AGENTS,
 };
 
 use super::{
     auth,
     config::{load_agent, teams_config},
     reply::spawn_teams_prompt,
-    types::{TeamsActivity, TeamsIncomingMessage},
+    types::{TeamsActivity, TeamsChannelAccount, TeamsIncomingMessage},
 };
 
 pub(crate) async fn messages(
@@ -44,24 +45,25 @@ pub(crate) async fn messages(
             "teams app_id is not configured".to_owned(),
         ));
     };
-    let message = match incoming_message(activity) {
-        Some(message) => message,
-        None => return Ok(StatusCode::OK),
-    };
+    let (service_url, channel_id) = activity_endpoint(&activity)?;
     auth::verify_connector_request(
         &state.http,
         headers
             .get("authorization")
             .and_then(|value| value.to_str().ok()),
         app_id,
-        &message.service_url,
-        &message.channel_id,
+        &service_url,
+        &channel_id,
     )
     .await?;
+    let message = match incoming_message(activity, service_url) {
+        Some(message) => message,
+        None => return Ok(StatusCode::OK),
+    };
+    let session_id = ensure_session(state.clone(), &pool, &agent, &message).await?;
     if !teams::repository::record_event(&pool, &agent.id, &event_key(&message)).await? {
         return Ok(StatusCode::OK);
     }
-    let session_id = ensure_session(state.clone(), &pool, &agent, &message).await?;
     spawn_teams_prompt(state, pool, agent, config, message, session_id);
     Ok(StatusCode::ACCEPTED)
 }
@@ -98,29 +100,15 @@ async fn create_session(
     agent: &ManagedAgentRow,
     message: &TeamsIncomingMessage,
 ) -> Result<String, GatewayError> {
-    if let Some(runtime) = agent_runtime(agent) {
-        create_runtime_session_for_agent(
-            state,
-            pool,
-            agent.id.clone(),
-            runtime,
-            session_title(message),
-            session_prompt(message),
-            session_metadata(message),
-        )
-        .await
-    } else {
-        let row = sessions::repository::create(
-            pool,
-            &agent.harness,
-            Some(&agent.id),
-            &session_title(message),
-            None,
-        )
-        .await?;
-        state.agent_runs.track_run(&agent.harness, &row.id);
-        Ok(row.id)
-    }
+    create_runtime_session_for_agent_without_prompt(
+        state,
+        pool,
+        agent.id.clone(),
+        agent_runtime(agent),
+        session_title(message),
+        session_metadata(message),
+    )
+    .await
 }
 
 async fn upsert_session(
@@ -160,13 +148,14 @@ fn session_metadata(message: &TeamsIncomingMessage) -> Value {
     })
 }
 
-fn incoming_message(activity: TeamsActivity) -> Option<TeamsIncomingMessage> {
+fn incoming_message(activity: TeamsActivity, service_url: String) -> Option<TeamsIncomingMessage> {
     if activity.activity_type.as_deref() != Some("message") {
         return None;
     }
+    if is_bot_message(&activity) {
+        return None;
+    }
     let text = clean_prompt(activity.text.as_deref().unwrap_or_default());
-    let service_url = activity.service_url.as_deref()?.trim().to_owned();
-    let channel_id = activity.channel_id.as_deref()?.trim().to_owned();
     let conversation_id = activity
         .conversation
         .as_ref()?
@@ -183,7 +172,6 @@ fn incoming_message(activity: TeamsActivity) -> Option<TeamsIncomingMessage> {
     Some(TeamsIncomingMessage {
         activity_id,
         service_url,
-        channel_id,
         conversation_id,
         tenant_id: tenant_id(&activity),
         team_id: nested_channel_data_id(activity.channel_data.as_ref(), "team"),
@@ -195,24 +183,38 @@ fn incoming_message(activity: TeamsActivity) -> Option<TeamsIncomingMessage> {
     })
 }
 
-fn session_prompt(message: &TeamsIncomingMessage) -> String {
-    format!(
-        concat!(
-            "Microsoft Teams context:\n",
-            "- tenant_id: {tenant_id}\n",
-            "- team_id: {team_id}\n",
-            "- channel_id: {channel_id}\n",
-            "- conversation_id: {conversation_id}\n",
-            "- requested_by: {user_id}\n\n",
-            "{prompt}"
-        ),
-        tenant_id = message.tenant_id.as_deref().unwrap_or("unknown"),
-        team_id = message.team_id.as_deref().unwrap_or("unknown"),
-        channel_id = message.teams_channel_id.as_deref().unwrap_or("unknown"),
-        conversation_id = message.conversation_id,
-        user_id = message.user_id.as_deref().unwrap_or("unknown"),
-        prompt = message.prompt,
-    )
+fn activity_endpoint(activity: &TeamsActivity) -> Result<(String, String), GatewayError> {
+    Ok((
+        required_activity_field(activity.service_url.as_deref(), "serviceUrl")?,
+        required_activity_field(activity.channel_id.as_deref(), "channelId")?,
+    ))
+}
+
+fn required_activity_field(value: Option<&str>, field: &str) -> Result<String, GatewayError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| GatewayError::InvalidJsonMessage(format!("teams {field} is required")))
+}
+
+fn is_bot_message(activity: &TeamsActivity) -> bool {
+    let from = activity.from.as_ref();
+    let role_is_bot = from
+        .and_then(|account| account.role.as_deref())
+        .is_some_and(|role| role.eq_ignore_ascii_case("bot"));
+    let same_account = match (account_id(from), account_id(activity.recipient.as_ref())) {
+        (Some(from), Some(recipient)) => from == recipient,
+        _ => false,
+    };
+    role_is_bot || same_account
+}
+
+fn account_id(account: Option<&TeamsChannelAccount>) -> Option<&str> {
+    account
+        .and_then(|account| account.id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn clean_prompt(text: &str) -> String {
@@ -250,7 +252,7 @@ fn nested_channel_data_id(channel_data: Option<&Value>, field: &str) -> Option<S
         .map(str::to_owned)
 }
 
-fn agent_runtime(agent: &ManagedAgentRow) -> Option<String> {
+fn agent_runtime(agent: &ManagedAgentRow) -> String {
     agent
         .config
         .get("runtime")
@@ -258,4 +260,9 @@ fn agent_runtime(agent: &ManagedAgentRow) -> Option<String> {
         .map(str::trim)
         .filter(|runtime| !runtime.is_empty())
         .map(str::to_owned)
+        .unwrap_or_else(|| CLAUDE_MANAGED_AGENTS.to_owned())
 }
+
+#[cfg(test)]
+#[path = "events_tests.rs"]
+mod tests;

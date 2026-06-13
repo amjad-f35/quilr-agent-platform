@@ -12,6 +12,7 @@ use crate::{
 
 use super::{
     config::load_app_password,
+    reply_lock::TeamsPromptLock,
     reply_stream::TeamsReply,
     storage::last_message_seq,
     types::{TeamsAgentConfig, TeamsIncomingMessage},
@@ -51,6 +52,7 @@ async fn run_teams_prompt(
         config.tenant_id.as_deref(),
     )
     .await?;
+    let _lock = TeamsPromptLock::acquire(&state.keyed_locks, &session_id).await;
     let baseline_seq = last_message_seq(&pool, &session_id).await?;
     let runtime_stream = runtime_event_stream_for_session(&state, &pool, &session_id)
         .await

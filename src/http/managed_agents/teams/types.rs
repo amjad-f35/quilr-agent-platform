@@ -34,6 +34,7 @@ pub(crate) struct TeamsActivity {
 pub(crate) struct TeamsChannelAccount {
     pub id: Option<String>,
     pub name: Option<String>,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -50,7 +51,6 @@ pub(crate) struct TeamsConversationAccount {
 pub(crate) struct TeamsIncomingMessage {
     pub activity_id: String,
     pub service_url: String,
-    pub channel_id: String,
     pub conversation_id: String,
     pub tenant_id: Option<String>,
     pub team_id: Option<String>,
