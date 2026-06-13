@@ -19,6 +19,7 @@ use super::{
     auth,
     config::{load_agent, teams_config},
     reply::spawn_teams_prompt,
+    session_lock::TeamsConversationLock,
     types::{TeamsActivity, TeamsChannelAccount, TeamsIncomingMessage},
 };
 
@@ -60,6 +61,9 @@ pub(crate) async fn messages(
         Some(message) => message,
         None => return Ok(StatusCode::OK),
     };
+    let _conversation_lock =
+        TeamsConversationLock::acquire(&state.keyed_locks, &agent.id, &message.conversation_id)
+            .await;
     let session_id = ensure_session(state.clone(), &pool, &agent, &message).await?;
     if !teams::repository::record_event(&pool, &agent.id, &event_key(&message)).await? {
         return Ok(StatusCode::OK);
@@ -78,8 +82,7 @@ async fn ensure_session(
         return Ok(session_id);
     }
     let session_id = create_session(state, pool, agent, message).await?;
-    upsert_session(pool, agent, message, &session_id).await?;
-    Ok(session_id)
+    upsert_session(pool, agent, message, &session_id).await
 }
 
 async fn refresh_existing_session(
@@ -90,8 +93,9 @@ async fn refresh_existing_session(
     let Some(row) = teams::repository::get(pool, &agent.id, &message.conversation_id).await? else {
         return Ok(None);
     };
-    upsert_session(pool, agent, message, &row.session_id).await?;
-    Ok(Some(row.session_id))
+    Ok(Some(
+        upsert_session(pool, agent, message, &row.session_id).await?,
+    ))
 }
 
 async fn create_session(
@@ -116,8 +120,8 @@ async fn upsert_session(
     agent: &ManagedAgentRow,
     message: &TeamsIncomingMessage,
     session_id: &str,
-) -> Result<(), GatewayError> {
-    teams::repository::upsert(
+) -> Result<String, GatewayError> {
+    let row = teams::repository::upsert(
         pool,
         teams::repository::UpsertConversationInput {
             agent_id: &agent.id,
@@ -130,7 +134,7 @@ async fn upsert_session(
         },
     )
     .await?;
-    Ok(())
+    Ok(row.session_id)
 }
 
 fn session_title(message: &TeamsIncomingMessage) -> String {

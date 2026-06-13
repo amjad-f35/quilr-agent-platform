@@ -44,7 +44,6 @@ pub async fn upsert(
           (agent_id, conversation_id, session_id, service_url, tenant_id, team_id, channel_id, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
         ON CONFLICT (agent_id, conversation_id) DO UPDATE SET
-          session_id = EXCLUDED.session_id,
           service_url = EXCLUDED.service_url,
           tenant_id = EXCLUDED.tenant_id,
           team_id = EXCLUDED.team_id,
