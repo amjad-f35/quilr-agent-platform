@@ -353,6 +353,9 @@ function SessionsStart() {
                       No configured runtimes
                     </div>
                   )}
+                  <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                    Go to AI Gateway &gt; Agent Runtimes to configure more runtimes.
+                  </div>
                 </SelectContent>
               </Select>
               <Button variant="ghost" size="icon-sm" disabled aria-label="Voice input (coming soon)" className="ml-auto hidden text-[#5d5a55] 2xl:inline-flex">

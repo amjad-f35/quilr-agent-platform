@@ -100,6 +100,9 @@ test.describe("Runtime dropdown", () => {
     await expect(page.getByText("Gemini Antigravity", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Elastic Agent Builder", { exact: true })).toHaveCount(0);
     await expect(page.getByText("missing key")).toHaveCount(0);
+    await expect(
+      page.getByText("Go to AI Gateway > Agent Runtimes to configure more runtimes."),
+    ).toBeVisible();
   });
 
   test("falls back when a saved agent uses a disconnected runtime", async ({ page }) => {
