@@ -23,9 +23,11 @@ const SLACK_VAULT_USER = "default";
 const SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:read",
+  "channels:write",
   "chat:write",
   "groups:history",
   "groups:read",
+  "groups:write",
   "im:history",
   "im:read",
   "im:write",
