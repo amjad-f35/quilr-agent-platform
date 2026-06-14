@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     extract::{Path, State},
@@ -144,6 +147,7 @@ pub async fn list_tools(
         .header("Accept", "application/json, text/event-stream");
     let req = apply_static_headers(req, &server.static_headers, &vars);
     let req = apply_user_credential(
+        &state,
         req,
         pool,
         &server,
@@ -151,53 +155,58 @@ pub async fn list_tools(
         &user_id,
         enc_key_opt.as_deref(),
     )
-    .await;
-    let tools = fetch_tools(req).await?;
+    .await?;
+    let tools = filter_allowed_tools(fetch_tools(req).await?, &server.allowed_tools);
     Ok(Json(ToolsResponse { server_id, tools }))
 }
 
 async fn apply_user_credential(
+    state: &AppState,
     mut req: reqwest::RequestBuilder,
     pool: &sqlx::PgPool,
     server: &McpServerRow,
     server_id: &str,
     user_id: &str,
     enc_key: Option<&str>,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder, GatewayError> {
     if server
         .static_headers
         .as_object()
         .is_some_and(|o| !o.is_empty())
     {
-        return req;
+        return Ok(req);
     }
-    let Some(key) = enc_key else { return req };
+    let Some(key) = enc_key else { return Ok(req) };
     let cred_name = format!("mcp_user:{server_id}:{user_id}");
     let dec = |enc: &str| credential_crypto::decrypt_value(enc, key).ok();
-    let cred: Option<String> = credentials::get_personal_by_name(pool, &cred_name, user_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| {
-            r.credential_values
-                .get("value")
-                .and_then(|v| v.as_str())
-                .and_then(dec)
-        })
-        .or_else(|| {
-            server
-                .credentials
-                .get("value")
-                .and_then(|v| v.as_str())
-                .and_then(dec)
-        })
-        .or_else(|| {
-            server
-                .credentials
-                .get("api_key")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-        });
+    let cred: Option<String> =
+        match super::oauth::resolve_oauth_bearer_token(state, pool, server, user_id, key).await? {
+            Some(value) => Some(value),
+            None => credentials::get_personal_by_name(pool, &cred_name, user_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| {
+                    r.credential_values
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .and_then(dec)
+                })
+                .or_else(|| {
+                    server
+                        .credentials
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .and_then(dec)
+                })
+                .or_else(|| {
+                    server
+                        .credentials
+                        .get("api_key")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                }),
+        };
     if let Some(cred) = cred {
         req = match server.auth_type.as_deref().unwrap_or("bearer_token") {
             "api_key" => req.header("x-api-key", cred),
@@ -205,7 +214,7 @@ async fn apply_user_credential(
             _ => req.header("Authorization", format!("Bearer {cred}")),
         };
     }
-    req
+    Ok(req)
 }
 
 /// POST /v1/mcp/server/{server_id}/tools — test with caller-supplied variable values.
@@ -239,8 +248,35 @@ pub async fn test_tools(
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream");
     let req = apply_static_headers(req, &server.static_headers, &vars);
-    let tools = fetch_tools(req).await?;
+    let tools = filter_allowed_tools(fetch_tools(req).await?, &server.allowed_tools);
     Ok(Json(ToolsResponse { server_id, tools }))
+}
+
+fn filter_allowed_tools(tools: Vec<Value>, allowed_tools: &Value) -> Vec<Value> {
+    let allowed = allowed_tool_names(allowed_tools);
+    if allowed.is_empty() {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| allowed.contains(name))
+        })
+        .collect()
+}
+
+fn allowed_tool_names(value: &Value) -> HashSet<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn build_instance_vars(server: &McpServerRow, enc_key: Option<&str>) -> HashMap<String, String> {

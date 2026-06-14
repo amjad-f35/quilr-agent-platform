@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     body::{Body, Bytes},
@@ -10,6 +13,7 @@ use axum::{
     response::Response,
 };
 use futures_util::TryStreamExt;
+use serde_json::{json, Value};
 
 use crate::{
     db::{credentials, mcp_servers::repository},
@@ -38,6 +42,16 @@ pub async fn dynamic_mcp(
     let server = repository::get_by_name(pool, &server_name)
         .await?
         .ok_or_else(|| GatewayError::NotFound(format!("MCP server '{server_name}' not found")))?;
+    let allowed_tools = allowed_tools(&server.allowed_tools);
+    let mcp_request = parse_mcp_request(&body);
+    if let Some(tool_name) = mcp_request.tool_name.as_deref() {
+        if !tool_is_allowed(tool_name, &allowed_tools) {
+            return Ok(mcp_error_response(
+                mcp_request.id.clone(),
+                "Tool is not allowed for this MCP server",
+            ));
+        }
+    }
 
     // ── 2. Target URL ─────────────────────────────────────────────────────────
     let base_url = server
@@ -74,10 +88,16 @@ pub async fn dynamic_mcp(
         .as_object()
         .is_some_and(|o| !o.is_empty());
     if !has_static_headers {
-        let credential: Option<String> =
-            resolve_user_credential(pool, &server.server_id, &user_id, &enc_key)
+        let credential = match super::oauth::resolve_oauth_bearer_token(
+            &state, pool, &server, &user_id, &enc_key,
+        )
+        .await?
+        {
+            Some(value) => Some(value),
+            None => resolve_user_credential(pool, &server.server_id, &user_id, &enc_key)
                 .await?
-                .or_else(|| resolve_server_credential(&server.credentials, &enc_key));
+                .or_else(|| resolve_server_credential(&server.credentials, &enc_key)),
+        };
         if let Some(cred) = credential {
             req = apply_auth(req, server.auth_type.as_deref(), &cred);
         }
@@ -91,6 +111,24 @@ pub async fn dynamic_mcp(
     let upstream = req.send().await.map_err(GatewayError::Upstream)?;
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    if mcp_request.method.as_deref() == Some("tools/list")
+        && status.is_success()
+        && !allowed_tools.is_empty()
+    {
+        let headers = copy_response_headers(upstream.headers());
+        let content_type = upstream
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let text = upstream.text().await.map_err(GatewayError::Upstream)?;
+        let filtered = filter_tools_list_payload(&text, &content_type, &allowed_tools);
+        let mut response = Response::new(Body::from(filtered));
+        *response.status_mut() = status;
+        *response.headers_mut() = headers;
+        return Ok(response);
+    }
     let resp_headers = copy_response_headers(upstream.headers());
     let stream = upstream.bytes_stream().map_err(std::io::Error::other);
     let mut response = Response::new(Body::from_stream(stream));
@@ -100,6 +138,118 @@ pub async fn dynamic_mcp(
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Default)]
+struct McpRequest {
+    id: Option<Value>,
+    method: Option<String>,
+    tool_name: Option<String>,
+}
+
+fn parse_mcp_request(body: &[u8]) -> McpRequest {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return McpRequest::default();
+    };
+    let Some(obj) = value.as_object() else {
+        return McpRequest::default();
+    };
+    let method = obj.get("method").and_then(Value::as_str).map(str::to_owned);
+    let tool_name = (method.as_deref() == Some("tools/call"))
+        .then(|| {
+            obj.get("params")
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .flatten();
+    McpRequest {
+        id: obj.get("id").cloned(),
+        method,
+        tool_name,
+    }
+}
+
+fn allowed_tools(value: &Value) -> HashSet<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn tool_is_allowed(tool_name: &str, allowed_tools: &HashSet<String>) -> bool {
+    allowed_tools.is_empty() || allowed_tools.contains(tool_name)
+}
+
+fn mcp_error_response(id: Option<Value>, message: &str) -> Response {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": id.unwrap_or(Value::Null),
+        "error": {
+            "code": -32602,
+            "message": message,
+        },
+    });
+    let mut response = Response::new(Body::from(body.to_string()));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+}
+
+fn filter_tools_list_payload(
+    text: &str,
+    content_type: &str,
+    allowed_tools: &HashSet<String>,
+) -> String {
+    if content_type.contains("event-stream") || text.starts_with("data:") {
+        return text
+            .lines()
+            .map(|line| {
+                let Some(data) = line.strip_prefix("data:") else {
+                    return line.to_owned();
+                };
+                let Ok(mut value) = serde_json::from_str::<Value>(data.trim()) else {
+                    return line.to_owned();
+                };
+                filter_tools_in_value(&mut value, allowed_tools);
+                format!("data: {value}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return text.to_owned();
+    };
+    filter_tools_in_value(&mut value, allowed_tools);
+    value.to_string()
+}
+
+fn filter_tools_in_value(value: &mut Value, allowed_tools: &HashSet<String>) {
+    if let Some(tools) = value
+        .pointer_mut("/result/tools")
+        .and_then(Value::as_array_mut)
+    {
+        tools.retain(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| tool_is_allowed(name, allowed_tools))
+        });
+    }
+    if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
+        tools.retain(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| tool_is_allowed(name, allowed_tools))
+        });
+    }
+}
 
 /// Build a variable substitution map from the server's `mcp_info["variables"]` array.
 ///
@@ -249,7 +399,9 @@ fn apply_auth(
     credential: &str,
 ) -> reqwest::RequestBuilder {
     match auth_type {
-        Some("bearer_token") => req.header("Authorization", format!("Bearer {credential}")),
+        Some("bearer_token") | Some("oauth2") => {
+            req.header("Authorization", format!("Bearer {credential}"))
+        }
         Some("api_key") => req.header("x-api-key", credential),
         Some("basic") => req.header("Authorization", format!("Basic {credential}")),
         _ => req,

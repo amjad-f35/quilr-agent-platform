@@ -1187,6 +1187,26 @@ export async function discoverMcpToolsFromUrl(
   return data.tools ?? [];
 }
 
+export interface McpOAuthStartResponse {
+  authorization_url: string;
+  redirect_uri: string;
+}
+
+export async function startMcpOAuth(
+  server_id: string,
+  input: { redirectAfter?: string; userId?: string } = {},
+): Promise<McpOAuthStartResponse> {
+  const res = await req(`/v1/mcp/server/${encodeURIComponent(server_id)}/oauth/start`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-user-id": input.userId ?? "default",
+    },
+    body: JSON.stringify({ redirect_after: input.redirectAfter ?? "/integrations" }),
+  });
+  return jsonOrThrow<McpOAuthStartResponse>(res);
+}
+
 /** Store a user credential for a BYOK MCP server. */
 export async function storeMcpUserCredential(
   server_id: string,

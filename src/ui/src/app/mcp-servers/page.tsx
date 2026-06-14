@@ -108,7 +108,6 @@ const GMAIL_TEMPLATE_TOOLS = [
   "create_draft",
   "list_drafts",
   "list_labels",
-  "label_thread",
 ];
 
 const GMAIL_TEMPLATE_SCOPES = [
@@ -171,8 +170,8 @@ const GMAIL_TEMPLATE_STEPS: {
       "Create the web client that redirects users back to LAP after Google consent.",
     details: [
       "Application type: Web application.",
-      "Redirect URI: https://YOUR_LAP_PUBLIC_URL/api/mcp/oauth/google/callback.",
-      "Save the client ID and client secret for the LAP environment.",
+      "Redirect URI: https://YOUR_LAP_PUBLIC_URL/v1/mcp/oauth/callback.",
+      "Save the client ID and client secret on the Gmail MCP server record.",
     ],
     code:
       "GOOGLE_OAUTH_CLIENT_ID=...\nGOOGLE_OAUTH_CLIENT_SECRET=...\nLITELLM_PROXY_BASE_URL=https://YOUR_LAP_PUBLIC_URL",
@@ -182,14 +181,14 @@ const GMAIL_TEMPLATE_STEPS: {
     eyebrow: "Implementation",
     icon: Check,
     body:
-      "Wire the template into LAP so users can click Connect Gmail instead of pasting credentials.",
+      "Register the Gmail MCP server once, then send users to Integrations to click Connect Gmail.",
     details: [
-      "Add OAuth start, callback, status, and disconnect endpoints.",
-      "Encrypt per-user Google tokens in the vault and refresh access tokens before MCP calls.",
+      "Set auth_type to oauth2 and store the Google OAuth client ID and secret on the server record.",
+      "Expose only read and draft tools; keep final email sending behind a future approval flow.",
       "Proxy Gmail MCP requests through LAP and inject Authorization: Bearer <access_token>.",
     ],
     code:
-      "GET /v1/mcp/server/{server_id}/oauth/start\nGET /api/mcp/oauth/google/callback\nGET /v1/mcp/server/{server_id}/oauth/status\nDELETE /v1/mcp/server/{server_id}/oauth",
+      "POST /v1/mcp/server/{server_id}/oauth/start\nGET /v1/mcp/oauth/callback\nGET /v1/mcp/user-credentials\nDELETE /v1/mcp/server/{server_id}/user-credential",
   },
 ];
 
