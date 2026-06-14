@@ -34,6 +34,7 @@ run_queues: dict[str, "queue.Queue[dict[str, Any]]"] = {}
 active_runs: dict[str, bool] = {}
 pending_prompts: dict[str, "queue.Queue[str]"] = {}
 abort_flags: dict[str, threading.Event] = {}
+TERMINAL_EVENTS = {"session.status_idle", "session.error"}
 
 
 def now_ms() -> int:
@@ -312,8 +313,16 @@ def latest_turn_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]
     return events
 
 
-def latest_turn_events(session_id: str) -> list[dict[str, Any]]:
-    return latest_turn_from_events(list_events(session_id))
+def replay_window_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for index in range(len(events) - 1, -1, -1):
+        if events[index]["event"] in TERMINAL_EVENTS:
+            if index == len(events) - 1:
+                return latest_turn_from_events(events)
+            return events[index + 1 :]
+    for index, event in enumerate(events):
+        if event["event"] == "user.message":
+            return events[index:]
+    return events
 
 
 def has_interrupt(events: list[dict[str, Any]]) -> bool:
@@ -792,7 +801,7 @@ def stream_events(session_id: str, x_api_key: str | None = Header(default=None))
 
     def generate():
         initial_events = list_events(session_id)
-        replayed = latest_turn_from_events(initial_events)
+        replayed = replay_window_from_events(initial_events)
         seen_ids = {item["id"] for item in initial_events if item.get("id") is not None}
         for item in replayed:
             yield sse_frame(item)
