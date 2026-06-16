@@ -20,10 +20,13 @@ agents/sessions locally, converts LAP session turns into OpenAI-compatible
 `/v1/chat/completions` calls, and streams Anthropic-shaped events back to the
 control plane.
 
-LAP-provided MCP servers are supported. When LAP provisions an agent with
-`mcp_servers`, this bridge keeps those server definitions with the agent and
-projects them into OpenClaw's `mcp.servers` config so OpenClaw can use the same
-MCP attachments selected in LAP.
+LAP-provided public URL MCP servers are supported. When LAP provisions an
+agent with `mcp_servers`, this bridge keeps those server definitions with the
+agent and projects the active session's agent into OpenClaw's `mcp.servers`
+config before each OpenClaw turn, so MCPs selected for one LAP agent are not
+unioned into every other agent. Credential-bearing MCP fields such as
+`authorization_token`, `headers`, `auth`, `oauth`, `env`, and client key
+material are rejected instead of being written to OpenClaw's on-disk config.
 
 ```text
 LAP control plane -> openclaw-agent-server :8080 -> OpenClaw Gateway :18789/v1/chat/completions -> LAP gateway :4000/v1/messages

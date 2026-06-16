@@ -38,12 +38,21 @@ OPENCLAW_MANAGED_MCP_PATH = os.environ.get(
 
 app = FastAPI(title="OpenClaw Anthropic Managed Agents bridge")
 state_lock = threading.Lock()
-config_lock = threading.Lock()
+config_lock = threading.RLock()
 run_queues: dict[str, "queue.Queue[dict[str, Any]]"] = {}
 active_runs: dict[str, bool] = {}
 pending_prompts: dict[str, "queue.Queue[str]"] = {}
 abort_flags: dict[str, threading.Event] = {}
 TERMINAL_EVENTS = {"session.status_idle", "session.error"}
+PERSISTED_MCP_SECRET_FIELDS = {
+    "authorization_token",
+    "headers",
+    "auth",
+    "oauth",
+    "env",
+    "clientCert",
+    "clientKey",
+}
 
 
 def now_ms() -> int:
@@ -271,22 +280,22 @@ def allowed_tool_names(server: dict[str, Any]) -> list[str]:
 
 def openclaw_mcp_server(server: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     name = server_name(server)
+    secret_fields = sorted(field for field in PERSISTED_MCP_SECRET_FIELDS if field in server)
+    if secret_fields:
+        raise ValueError(
+            f"mcp server {name} cannot include credential fields: {', '.join(secret_fields)}"
+        )
     result: dict[str, Any] = {}
     for key in (
         "command",
         "args",
-        "env",
         "url",
         "transport",
         "timeout",
         "connectTimeout",
         "connectionTimeoutMs",
         "requestTimeoutMs",
-        "auth",
-        "oauth",
         "sslVerify",
-        "clientCert",
-        "clientKey",
         "supportsParallelToolCalls",
         "enabled",
         "toolFilter",
@@ -298,62 +307,25 @@ def openclaw_mcp_server(server: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if "command" not in result and "url" not in result:
         raise ValueError(f"mcp server {name} requires url or command")
 
-    headers = result.get("headers") if isinstance(result.get("headers"), dict) else {}
-    headers = dict(headers)
-    token = server.get("authorization_token")
-    if isinstance(token, str) and token.strip() and "Authorization" not in headers:
-        value = token.strip()
-        headers["Authorization"] = value if value.lower().startswith("bearer ") else f"Bearer {value}"
-    raw_headers = server.get("headers")
-    if isinstance(raw_headers, dict):
-        headers.update(raw_headers)
-    if headers:
-        result["headers"] = headers
-
     allowed_tools = allowed_tool_names(server)
     if allowed_tools and "toolFilter" not in result:
         result["toolFilter"] = {"include": allowed_tools}
     return name, result
 
 
-def agent_source_key(row: sqlite3.Row) -> str:
-    metadata = parse_json(row["metadata"], {})
-    if isinstance(metadata, dict):
-        local_agent_id = metadata.get("local_agent_id")
-        if isinstance(local_agent_id, str) and local_agent_id.strip():
-            return f"lap:{local_agent_id.strip()}"
-    return f"provider:{row['id']}"
-
-
-def latest_agent_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    rows = conn.execute(
-        "SELECT id, mcp_servers, metadata, created_at FROM agents ORDER BY created_at ASC, id ASC"
-    ).fetchall()
-    latest: dict[str, sqlite3.Row] = {}
-    for row in rows:
-        latest[agent_source_key(row)] = row
-    return list(latest.values())
-
-
-def agent_mcp_servers(conn: sqlite3.Connection | None = None) -> dict[str, dict[str, Any]]:
+def agent_mcp_servers(row: sqlite3.Row) -> dict[str, dict[str, Any]]:
     desired: dict[str, dict[str, Any]] = {}
-    if conn is None:
-        with db() as owned_conn:
-            rows = latest_agent_rows(owned_conn)
-    else:
-        rows = latest_agent_rows(conn)
-    for row in rows:
-        servers = parse_json(row["mcp_servers"], [])
-        if not isinstance(servers, list):
-            continue
-        for server in servers:
-            if not isinstance(server, dict):
-                raise ValueError(f"agent {row['id']} has invalid mcp server entry")
-            name, config = openclaw_mcp_server(server)
-            existing = desired.get(name)
-            if existing is not None and config_signature(existing) != config_signature(config):
-                raise ValueError(f"conflicting MCP server config for {name}")
-            desired[name] = config
+    servers = parse_json(row["mcp_servers"], [])
+    if not isinstance(servers, list):
+        raise ValueError(f"agent {row['id']} mcp_servers must be a list")
+    for server in servers:
+        if not isinstance(server, dict):
+            raise ValueError(f"agent {row['id']} has invalid mcp server entry")
+        name, config = openclaw_mcp_server(server)
+        existing = desired.get(name)
+        if existing is not None and config_signature(existing) != config_signature(config):
+            raise ValueError(f"conflicting MCP server config for {name}")
+        desired[name] = config
     return desired
 
 
@@ -371,9 +343,9 @@ def validate_mcp_servers_input(mcp_servers: list[dict[str, Any]] | None) -> None
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def sync_openclaw_mcp_config_or_400(conn: sqlite3.Connection) -> None:
+def sync_openclaw_mcp_config_or_400(agent_row: sqlite3.Row) -> None:
     try:
-        sync_openclaw_mcp_config(conn)
+        sync_openclaw_mcp_config(agent_row)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -395,9 +367,9 @@ def ensure_mcp_tool_policy(config: dict[str, Any], has_mcp_servers: bool) -> Non
         also_allow.append("bundle-mcp")
 
 
-def sync_openclaw_mcp_config(conn: sqlite3.Connection | None = None) -> None:
+def sync_openclaw_mcp_config(agent_row: sqlite3.Row) -> None:
     with config_lock:
-        desired = agent_mcp_servers(conn)
+        desired = agent_mcp_servers(agent_row)
         config_path = openclaw_config_path()
         config = read_openclaw_config(config_path)
         mcp = config.setdefault("mcp", {})
@@ -416,14 +388,6 @@ def sync_openclaw_mcp_config(conn: sqlite3.Connection | None = None) -> None:
         ensure_mcp_tool_policy(config, bool(desired))
         write_json_file(config_path, config)
         write_json_file(managed_path, sorted(desired))
-
-
-@app.on_event("startup")
-def sync_openclaw_mcp_config_on_startup() -> None:
-    try:
-        sync_openclaw_mcp_config()
-    except Exception as exc:
-        print(f"OpenClaw MCP config sync failed: {exc}")
 
 
 def row_to_agent(row: sqlite3.Row) -> dict[str, Any]:
@@ -741,27 +705,29 @@ def parse_chat_tool_calls(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def call_openclaw_chat(session_id: str, prompt: str, agent_row: sqlite3.Row) -> dict[str, Any]:
-    target_model, backend_model = openclaw_request_target(agent_row)
-    messages: list[dict[str, str]] = []
-    if agent_row["system"]:
-        messages.append({"role": "system", "content": agent_row["system"]})
-    messages.append({"role": "user", "content": prompt})
-    body = {
-        "model": target_model,
-        "user": session_id,
-        "messages": messages,
-    }
-    with httpx.Client(timeout=OPENCLAW_REQUEST_TIMEOUT_SECONDS) as client:
-        response = client.post(
-            openclaw_url("/chat/completions"),
-            headers=openclaw_headers(session_id=session_id, backend_model=backend_model),
-            json=body,
-        )
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"OpenClaw chat completion failed ({response.status_code}): {clip(response.text, 4_000)}"
+    with config_lock:
+        sync_openclaw_mcp_config(agent_row)
+        target_model, backend_model = openclaw_request_target(agent_row)
+        messages: list[dict[str, str]] = []
+        if agent_row["system"]:
+            messages.append({"role": "system", "content": agent_row["system"]})
+        messages.append({"role": "user", "content": prompt})
+        body = {
+            "model": target_model,
+            "user": session_id,
+            "messages": messages,
+        }
+        with httpx.Client(timeout=OPENCLAW_REQUEST_TIMEOUT_SECONDS) as client:
+            response = client.post(
+                openclaw_url("/chat/completions"),
+                headers=openclaw_headers(session_id=session_id, backend_model=backend_model),
+                json=body,
             )
-        return response.json()
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"OpenClaw chat completion failed ({response.status_code}): {clip(response.text, 4_000)}"
+                )
+            return response.json()
 
 
 def finish_run(session_id: str) -> None:
@@ -880,7 +846,7 @@ def create_agent(input: CreateAgentRequest) -> dict[str, Any]:
             ),
         )
         row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
-        sync_openclaw_mcp_config_or_400(conn)
+        sync_openclaw_mcp_config_or_400(row)
     return row_to_agent(row)
 
 
@@ -933,7 +899,7 @@ def update_agent(agent_id: str, input: CreateAgentRequest) -> dict[str, Any]:
             ),
         )
         row = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
-        sync_openclaw_mcp_config_or_400(conn)
+        sync_openclaw_mcp_config_or_400(row)
     return row_to_agent(row)
 
 
