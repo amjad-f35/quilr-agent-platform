@@ -6,10 +6,11 @@ use axum::{
     Json,
 };
 use serde_json::{json, Value};
+use tracing::warn;
 
 use crate::{
     channels::google_chat::{self, repository::EventClaim},
-    db::managed_agents::registry::schema::ManagedAgentRow,
+    db::managed_agents::{registry::schema::ManagedAgentRow, sessions},
     errors::GatewayError,
     http::sessions::create_runtime_session_for_agent_without_prompt,
     proxy::state::AppState,
@@ -38,20 +39,15 @@ pub(crate) async fn events(
         .clone();
     let agent = load_agent(&pool, &agent_id).await?;
     let config = google_chat_config(&agent)?;
-    let endpoint_audience = config_value(config.auth_audience.as_deref());
-    let project_number = config_value(config.project_number.as_deref());
-    if endpoint_audience.is_none() && project_number.is_none() {
-        return Err(GatewayError::InvalidConfig(
-            "google_chat auth_audience or project_number is not configured".to_owned(),
-        ));
-    }
+    let endpoint_audience = config_value(config.auth_audience.as_deref()).ok_or_else(|| {
+        GatewayError::InvalidConfig("google_chat auth_audience is not configured".to_owned())
+    })?;
     auth::verify_google_chat_request(
         &state.http,
         headers
             .get("authorization")
             .and_then(|value| value.to_str().ok()),
         endpoint_audience,
-        project_number,
     )
     .await?;
     let message = match incoming_message_for_app(event, config.app_name.as_deref()) {
@@ -89,9 +85,18 @@ async fn ensure_session(
         return Ok(None);
     }
     let session_id = create_session(state, pool, agent, message).await?;
-    upsert_session(pool, agent, message, &session_id)
-        .await
-        .map(Some)
+    match upsert_session(pool, agent, message, &session_id).await {
+        Ok(mapped_session_id) => {
+            if mapped_session_id != session_id {
+                cleanup_created_session(pool, &session_id).await;
+            }
+            Ok(Some(mapped_session_id))
+        }
+        Err(error) => {
+            cleanup_created_session(pool, &session_id).await;
+            Err(error)
+        }
+    }
 }
 
 async fn refresh_existing_session(
@@ -160,6 +165,12 @@ async fn upsert_session(
     )
     .await?;
     Ok(row.session_id)
+}
+
+async fn cleanup_created_session(pool: &sqlx::PgPool, session_id: &str) {
+    if let Err(error) = sessions::repository::delete(pool, session_id).await {
+        warn!("google chat session cleanup failed: {error}");
+    }
 }
 
 fn session_metadata(message: &GoogleChatIncomingMessage) -> Value {

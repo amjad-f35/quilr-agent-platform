@@ -37,7 +37,7 @@ Set the app endpoint to the LAP event endpoint:
 $LAP_URL/api/agents/<agent-id>/google-chat/events
 ```
 
-Set the auth audience to the same endpoint URL. If your Google Chat configuration sends project-number audience tokens, keep the Google Cloud project number handy for the LAP flow.
+Set the auth audience to the same endpoint URL.
 
 Configure app visibility for the workspace or test users that should be able to install and message the app.
 
@@ -46,7 +46,6 @@ Configure app visibility for the workspace or test users that should be able to 
 Paste these values into the LAP Google Chat flow:
 
 - App name
-- Google Cloud project number, if your app uses project-number audience tokens
 - Service account JSON key
 
 Click **Save Configuration**.
@@ -61,7 +60,6 @@ The saved agent config looks like this:
     "app_name": "Lite Agent",
     "status": "connected",
     "auth_audience": "$LAP_URL/api/agents/<agent-id>/google-chat/events",
-    "project_number": "<google-cloud-project-number>",
     "service_account_json_key": "GOOGLE_CHAT_<agent-id>_SERVICE_ACCOUNT_JSON"
   }
 }
@@ -113,7 +111,6 @@ Then patch the agent config while preserving any existing config values:
 
 ```bash
 export GOOGLE_CHAT_ENDPOINT="$LAP_URL/api/agents/$AGENT_ID/google-chat/events"
-export GOOGLE_CLOUD_PROJECT_NUMBER=""
 
 AGENT_CONFIG="$(curl -s "$LAP_URL/api/agents/$AGENT_ID" \
   -H "Authorization: Bearer $MASTER_KEY" | jq '.config')"
@@ -124,7 +121,6 @@ curl -X PATCH "$LAP_URL/api/agents/$AGENT_ID" \
   -d "$(jq -n \
     --argjson config "$AGENT_CONFIG" \
     --arg endpoint "$GOOGLE_CHAT_ENDPOINT" \
-    --arg project "$GOOGLE_CLOUD_PROJECT_NUMBER" \
     --arg key "$SERVICE_ACCOUNT_KEY" \
     '{
       config: ($config + {
@@ -133,7 +129,7 @@ curl -X PATCH "$LAP_URL/api/agents/$AGENT_ID" \
           status: "connected",
           auth_audience: $endpoint,
           service_account_json_key: $key
-        } + if $project == "" then {} else {project_number: $project} end)
+        })
       })
     }')"
 ```
@@ -141,7 +137,7 @@ curl -X PATCH "$LAP_URL/api/agents/$AGENT_ID" \
 ## Troubleshooting
 
 - **No callback reaches LAP:** Confirm the Google Chat app URL uses the public HTTPS LAP URL and ends with `/api/agents/<agent-id>/google-chat/events`.
-- **Unauthorized callback:** Confirm the auth audience saved in LAP matches the app URL exactly. If using project-number audience tokens, confirm the project number saved in LAP matches the Google Cloud project.
+- **Unauthorized callback:** Confirm the auth audience saved in LAP matches the app URL exactly.
 - **Bot cannot reply:** Confirm the service account JSON is valid and belongs to the Google Cloud project that owns the Chat app.
 - **Bot replies with an agent error:** Confirm the agent runtime and model provider credentials work from the LAP UI before testing Google Chat.
 

@@ -5,7 +5,6 @@ pub(crate) struct GoogleChatAgentConfig {
     pub app_name: Option<String>,
     pub status: Option<String>,
     pub auth_audience: Option<String>,
-    pub project_number: Option<String>,
     pub service_account_json_key: Option<String>,
 }
 

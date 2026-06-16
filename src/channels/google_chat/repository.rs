@@ -75,7 +75,22 @@ pub async fn claim_event(
 ) -> Result<EventClaim, GatewayError> {
     let mut tx = pool.begin().await.map_err(GatewayError::Database)?;
     let now = now_ms();
-    let existing = sqlx::query_as::<_, (String, i64)>(
+    let claim = if insert_event(tx.as_mut(), agent_id, event_id, now).await? {
+        EventClaim::Claimed
+    } else {
+        claim_existing_event(tx.as_mut(), agent_id, event_id, now).await?
+    };
+    tx.commit().await.map_err(GatewayError::Database)?;
+    Ok(claim)
+}
+
+async fn claim_existing_event(
+    conn: &mut sqlx::PgConnection,
+    agent_id: &str,
+    event_id: &str,
+    now: i64,
+) -> Result<EventClaim, GatewayError> {
+    let (status, updated_at) = sqlx::query_as::<_, (String, i64)>(
         r#"
         SELECT status, updated_at
         FROM "LiteLLM_ManagedAgentGoogleChatEventsTable"
@@ -85,28 +100,18 @@ pub async fn claim_event(
     )
     .bind(agent_id)
     .bind(event_id)
-    .fetch_optional(tx.as_mut())
+    .fetch_one(&mut *conn)
     .await
     .map_err(GatewayError::Database)?;
 
-    let claim = match existing {
-        None => {
-            insert_event(tx.as_mut(), agent_id, event_id, now).await?;
-            EventClaim::Claimed
-        }
-        Some((status, _)) if status == "completed" => EventClaim::Completed,
-        Some((status, updated_at))
-            if status == "processing" && now - updated_at < EVENT_PROCESSING_TIMEOUT_MS =>
-        {
-            EventClaim::InProgress
-        }
-        Some(_) => {
-            update_event_status(tx.as_mut(), agent_id, event_id, "processing", now).await?;
-            EventClaim::Claimed
-        }
-    };
-    tx.commit().await.map_err(GatewayError::Database)?;
-    Ok(claim)
+    if status == "completed" {
+        return Ok(EventClaim::Completed);
+    }
+    if status == "processing" && now - updated_at < EVENT_PROCESSING_TIMEOUT_MS {
+        return Ok(EventClaim::InProgress);
+    }
+    update_event_status(conn, agent_id, event_id, "processing", now).await?;
+    Ok(EventClaim::Claimed)
 }
 
 async fn insert_event(
@@ -114,12 +119,13 @@ async fn insert_event(
     agent_id: &str,
     event_id: &str,
     now: i64,
-) -> Result<(), GatewayError> {
-    sqlx::query(
+) -> Result<bool, GatewayError> {
+    let result = sqlx::query(
         r#"
         INSERT INTO "LiteLLM_ManagedAgentGoogleChatEventsTable"
           (agent_id, event_id, created_at, updated_at, status)
         VALUES ($1, $2, $3, $3, 'processing')
+        ON CONFLICT (agent_id, event_id) DO NOTHING
         "#,
     )
     .bind(agent_id)
@@ -128,7 +134,7 @@ async fn insert_event(
     .execute(conn)
     .await
     .map_err(GatewayError::Database)?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 async fn update_event_status(

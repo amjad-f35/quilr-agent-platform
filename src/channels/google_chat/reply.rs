@@ -107,10 +107,7 @@ async fn complete_claim(
     agent: &ManagedAgentRow,
     message: &GoogleChatIncomingMessage,
 ) -> Result<(), GatewayError> {
-    match google_chat::repository::complete_event(pool, &agent.id, &message.message_name).await {
-        Ok(()) => Ok(()),
-        Err(error) => fail_claim(pool, agent, message, error).await,
-    }
+    google_chat::repository::complete_event(pool, &agent.id, &message.message_name).await
 }
 
 struct GoogleChatEventHeartbeat {

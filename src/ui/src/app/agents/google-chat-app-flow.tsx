@@ -23,7 +23,6 @@ export interface GoogleChatConfig {
   app_name?: string;
   status?: string;
   auth_audience?: string;
-  project_number?: string;
   service_account_json_key?: string;
 }
 
@@ -57,7 +56,6 @@ export function useGoogleChatAppFlow(setAgents: Dispatch<SetStateAction<Agent[] 
   const [step, setStep] = useState(1);
   const [agent, setAgent] = useState<Agent | null>(null);
   const [appName, setAppName] = useState("");
-  const [projectNumber, setProjectNumber] = useState("");
   const [serviceAccountJson, setServiceAccountJson] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +64,6 @@ export function useGoogleChatAppFlow(setAgents: Dispatch<SetStateAction<Agent[] 
     const existing = googleChatConfig(ag);
     setAgent(ag);
     setAppName(existing.app_name || ag.name || "Lite Agent");
-    setProjectNumber(existing.project_number || "");
     setServiceAccountJson("");
     setStep(existing.status === "connected" ? 2 : 1);
     setError(null);
@@ -94,7 +91,6 @@ export function useGoogleChatAppFlow(setAgents: Dispatch<SetStateAction<Agent[] 
             app_name: appName.trim(),
             status: "connected",
             auth_audience: endpoint,
-            project_number: projectNumber.trim() || undefined,
             service_account_json_key: serviceAccountJsonKey,
           },
         },
@@ -231,16 +227,6 @@ export function useGoogleChatAppFlow(setAgents: Dispatch<SetStateAction<Agent[] 
                     <p className="text-xs text-muted-foreground">
                       Set this as the audience in Google Cloud Console.
                     </p>
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="gchat-project-number">Google Cloud Project Number</Label>
-                    <Input
-                      id="gchat-project-number"
-                      value={projectNumber}
-                      onChange={(e) => setProjectNumber(e.target.value)}
-                      placeholder="123456789012"
-                      className="font-mono text-xs"
-                    />
                   </div>
                   <div className="grid gap-1.5">
                     <Label htmlFor="gchat-service-account">Service Account JSON</Label>
