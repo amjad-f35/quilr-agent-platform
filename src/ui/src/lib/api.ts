@@ -17,6 +17,7 @@ import type {
   SpendLog,
   VaultKeyEntry,
 } from "./types";
+import { preferredModel } from "./model-options";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -666,11 +667,10 @@ export async function listModels(runtime?: string): Promise<string[]> {
   return items.map((m) => m.id).filter(Boolean);
 }
 
-function draftModelFrom(models: string[]): string {
-  const concrete = models.filter((model) => !model.endsWith("/*"));
-  // Prefer Claude 4+ models for drafting; avoid deprecated Claude 3.x models
-  const preferred = concrete.find((m) => /claude-(4|sonnet-4|opus-4|haiku-4|fable)/.test(m));
-  const model = preferred ?? concrete[0] ?? models[0];
+function draftModelFrom(models: string[], requestedModel?: string): string {
+  const modelOptions = models.map((model) => model.trim()).filter(Boolean);
+  const requested = requestedModel?.trim();
+  const model = requested && modelOptions.includes(requested) ? requested : preferredModel(modelOptions);
   if (!model) throw new Error("No models are configured.");
   return model;
 }
@@ -742,9 +742,10 @@ function runtimeToolCatalogPrompt(runtimes: AgentRuntime[]): string {
 export async function draftAgentConfigWithModel(
   desire: string,
   runtimes: AgentRuntime[] = [],
+  requestedModel?: string,
 ): Promise<string> {
   const models = await listModels();
-  const model = draftModelFrom(models);
+  const model = draftModelFrom(models, requestedModel);
   const res = await req("/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json" },
