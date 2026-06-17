@@ -10,6 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 axum = "0.8"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 base64 = "0.22"
 crypto_secretbox = { version = "0.1", features = ["std"] }
 dotenvy = "0.15"
