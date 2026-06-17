@@ -68,6 +68,10 @@ fn api_routes() -> Router<Arc<AppState>> {
             "/api/plugin-manifest",
             get(crate::http::plugin_manifest::plugin_manifest),
         )
+        .route(
+            "/api/plugin-auth",
+            post(crate::http::plugin_auth::plugin_auth),
+        )
         .route("/api/platform-mcps", get(crate::http::platform_mcps::list))
         .route(
             "/api/agent-runtimes",
