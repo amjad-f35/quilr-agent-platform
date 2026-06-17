@@ -113,7 +113,7 @@ pub async fn delete_vault_key(
 }
 
 /// List vault keys for a user: returns their personal keys + all global keys.
-/// Does NOT return provider credentials (those have names starting with "provider:").
+/// Does NOT return internal provider/runtime metadata credentials.
 pub async fn list_vault_keys_for_user(
     pool: &PgPool,
     owner_id: &str,
@@ -128,6 +128,7 @@ pub async fn list_vault_keys_for_user(
         FROM "LiteLLM_CredentialsTable"
         WHERE (scope = 'global' OR (scope = 'personal' AND owner_id = $1))
           AND credential_name NOT LIKE 'provider:%'
+          AND credential_name NOT LIKE 'anthropic-managed-agent-%'
         ORDER BY scope ASC, credential_name ASC
         "#,
     )
@@ -144,7 +145,17 @@ pub async fn resolve_vault_key(
     key_name: &str,
     owner_id: &str,
 ) -> Result<Option<String>, GatewayError> {
-    // Try personal key first, then fall back to global.
+    if let Some(value) = resolve_personal_vault_key(pool, key_name, owner_id).await? {
+        return Ok(Some(value));
+    }
+    resolve_global_vault_key(pool, key_name).await
+}
+
+pub async fn resolve_personal_vault_key(
+    pool: &PgPool,
+    key_name: &str,
+    owner_id: &str,
+) -> Result<Option<String>, GatewayError> {
     let row = sqlx::query_as::<_, CredentialRow>(
         r#"
         SELECT credential_values
@@ -160,10 +171,13 @@ pub async fn resolve_vault_key(
     .await
     .map_err(GatewayError::Database)?;
 
-    if let Some(row) = row {
-        return Ok(extract_vault_value(&row.credential_values));
-    }
+    Ok(row.and_then(|r| extract_vault_value(&r.credential_values)))
+}
 
+pub async fn resolve_global_vault_key(
+    pool: &PgPool,
+    key_name: &str,
+) -> Result<Option<String>, GatewayError> {
     let global = sqlx::query_as::<_, CredentialRow>(
         r#"
         SELECT credential_values

@@ -1,6 +1,11 @@
 use serde_json::json;
+use std::collections::BTreeSet;
 
-use super::{anthropic_v1_base, gateway_mcp_credentials};
+use super::{
+    anthropic_v1_base, gateway_mcp_credentials, is_environment_variable_name,
+    stored_credential_changed, stored_credential_fingerprints, stored_credential_keys,
+    EnvironmentVaultCredential, StoredVault, VaultCredential,
+};
 use crate::{
     agents::config::E2bSandboxParams,
     proxy::{
@@ -56,6 +61,107 @@ fn normalizes_anthropic_v1_base() {
         anthropic_v1_base("https://api.anthropic.com/v1/"),
         "https://api.anthropic.com/v1"
     );
+}
+
+#[test]
+fn builds_environment_variable_credential_body() {
+    let credential = VaultCredential::EnvironmentVariable(EnvironmentVaultCredential {
+        name: "BROWSER_USE_API_KEY".to_owned(),
+        value: "secret".to_owned(),
+    });
+
+    assert_eq!(
+        credential.auth(),
+        json!({
+            "type": "environment_variable",
+            "secret_name": "BROWSER_USE_API_KEY",
+            "secret_value": "secret"
+        })
+    );
+    assert_eq!(credential.storage_key(), "env:BROWSER_USE_API_KEY");
+}
+
+#[test]
+fn loads_legacy_and_current_stored_credential_keys() {
+    let keys = stored_credential_keys(&json!({
+        "credential_keys": ["env:BROWSER_USE_API_KEY"],
+        "credential_urls": ["https://gateway.example.com/mcp_gmail/mcp"]
+    }));
+
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "env:BROWSER_USE_API_KEY".to_owned(),
+            "mcp:https://gateway.example.com/mcp_gmail/mcp".to_owned()
+        ])
+    );
+}
+
+#[test]
+fn loads_stored_credential_fingerprints() {
+    let fingerprints = stored_credential_fingerprints(&json!({
+        "credential_fingerprints": {
+            "env:BROWSER_USE_API_KEY": "abc123"
+        }
+    }));
+
+    assert_eq!(
+        fingerprints
+            .get("env:BROWSER_USE_API_KEY")
+            .map(String::as_str),
+        Some("abc123")
+    );
+}
+
+#[test]
+fn detects_rotated_stored_credentials() {
+    let old = VaultCredential::EnvironmentVariable(EnvironmentVaultCredential {
+        name: "BROWSER_USE_API_KEY".to_owned(),
+        value: "old".to_owned(),
+    });
+    let new = VaultCredential::EnvironmentVariable(EnvironmentVaultCredential {
+        name: "BROWSER_USE_API_KEY".to_owned(),
+        value: "new".to_owned(),
+    });
+    let stored = StoredVault {
+        vault_id: Some("vault_1".to_owned()),
+        credential_keys: BTreeSet::from([old.storage_key()]),
+        credential_fingerprints: [(old.storage_key(), old.fingerprint())].into(),
+    };
+
+    assert!(stored_credential_changed(&stored, &[new]));
+}
+
+#[test]
+fn detects_removed_stored_credentials() {
+    let old = VaultCredential::EnvironmentVariable(EnvironmentVaultCredential {
+        name: "OLD_API_KEY".to_owned(),
+        value: "old".to_owned(),
+    });
+    let current = VaultCredential::EnvironmentVariable(EnvironmentVaultCredential {
+        name: "CURRENT_API_KEY".to_owned(),
+        value: "current".to_owned(),
+    });
+    let stored = StoredVault {
+        vault_id: Some("vault_1".to_owned()),
+        credential_keys: BTreeSet::from([old.storage_key(), current.storage_key()]),
+        credential_fingerprints: [
+            (old.storage_key(), old.fingerprint()),
+            (current.storage_key(), current.fingerprint()),
+        ]
+        .into(),
+    };
+
+    assert!(stored_credential_changed(&stored, &[current]));
+}
+
+#[test]
+fn validates_environment_variable_names() {
+    assert!(is_environment_variable_name("BROWSER_USE_API_KEY"));
+    assert!(is_environment_variable_name("_TOKEN"));
+    assert!(!is_environment_variable_name("1TOKEN"));
+    assert!(!is_environment_variable_name("browser-use-api-key"));
+    assert!(!is_environment_variable_name(""));
 }
 
 fn state(proxy_base_url: &str, master_key: Option<&str>) -> AppState {

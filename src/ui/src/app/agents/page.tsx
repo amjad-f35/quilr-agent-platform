@@ -27,16 +27,17 @@ import {
 } from "@/components/ui/select";
 import { ScheduleEditor } from "@/components/schedule-editor";
 import {
+  DEFAULT_VAULT_USER,
   listAgents,
   listAgentRuntimes,
   updateAgent,
   deleteAgent,
   listRules,
   listSkills,
-  listVaultKeys,
+  listVaultKeysForUser,
   listPlatformMcps,
   saveIntegrationKey,
-  deleteIntegrationKey,
+  savePersonalVaultKey,
   listMemory,
   storeMemory,
   deleteMemory,
@@ -111,6 +112,7 @@ export default function AgentsPage() {
   const [vaultKeyInput, setVaultKeyInput] = useState("");
   const [vaultValues, setVaultValues] = useState<Record<string, string>>({});
   const [storedKeyEntries, setStoredKeyEntries] = useState<VaultKeyEntry[]>([]);
+  const [vaultUserId, setVaultUserId] = useState(DEFAULT_VAULT_USER);
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [memKey, setMemKey] = useState("");
   const [memValue, setMemValue] = useState("");
@@ -129,34 +131,46 @@ export default function AgentsPage() {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+  const refreshVaultKeys = async (userId = vaultUserId) => {
+    try {
+      setStoredKeyEntries(await listVaultKeysForUser(userId));
+    } catch {
+      setStoredKeyEntries([]);
+    }
+  };
   useEffect(() => {
     load();
     listRules().then(setRules).catch(() => setRules([]));
     listSkills().then(setSkills).catch(() => setSkills([]));
     listPlatformMcps().then(setPlatformMcps).catch(() => setPlatformMcps([]));
     listAgentRuntimes().then(setRuntimes).catch(() => setRuntimes([]));
-    listVaultKeys().then(setStoredKeyEntries).catch(() => setStoredKeyEntries([]));
+    listVaultKeysForUser(DEFAULT_VAULT_USER)
+      .then(setStoredKeyEntries)
+      .catch(() => setStoredKeyEntries([]));
   }, []);
 
-  const addVaultKey = () => {
-    const k = vaultKeyInput.trim();
+  const attachVaultKey = (key: string) => {
+    const k = canonicalVaultKey(key, storedKeyEntries);
     if (!k) return;
     setForm((f) => (f.vault_keys.includes(k) ? f : { ...f, vault_keys: [...f.vault_keys, k] }));
+  };
+  const addVaultKey = () => {
+    attachVaultKey(vaultKeyInput);
     setVaultKeyInput("");
   };
   const removeVaultKey = (k: string) => {
     setForm((f) => ({ ...f, vault_keys: f.vault_keys.filter((x) => x !== k) }));
-    const scope = storedKeyEntries.find((x) => x.key === k)?.scope ?? "personal";
-    deleteIntegrationKey(k, scope).then(() =>
-      setStoredKeyEntries((p) => p.filter((x) => x.key !== k))
-    ).catch(() => {});
     setVaultValues(({ [k]: _drop, ...rest }) => rest);
   };
   const saveVaultValue = async (k: string) => {
     const v = vaultValues[k];
     if (!v) return;
     try {
-      await saveIntegrationKey(k, v, "personal");
+      if (vaultUserId === DEFAULT_VAULT_USER) {
+        await saveIntegrationKey(k, v, "personal");
+      } else {
+        await savePersonalVaultKey(vaultUserId, k, v);
+      }
       setStoredKeyEntries((p) => [
         ...p.filter((x) => !(x.key === k && x.scope === "personal")),
         { key: k, scope: "personal" },
@@ -234,7 +248,9 @@ export default function AgentsPage() {
   };
 
   const openEdit = (ag: Agent) => {
+    const owner = ag.owner_id?.trim() || DEFAULT_VAULT_USER;
     setEditingId(ag.id);
+    setVaultUserId(owner);
     setForm({
       name: ag.name ?? "",
       description: ag.description ?? "",
@@ -253,6 +269,7 @@ export default function AgentsPage() {
     setVaultValues({});
     setMemKey("");
     setMemValue("");
+    refreshVaultKeys(owner);
     loadMemory(ag.id);
     setOpen(true);
   };
@@ -606,7 +623,39 @@ export default function AgentsPage() {
               <p className="text-[11px] text-muted-foreground -mt-1">
                 Secrets this agent can use. Reference them in the prompt as{" "}
                 <span className="font-mono">{"{{vault.KEY_NAME}}"}</span>.
+                {vaultUserId !== DEFAULT_VAULT_USER && (
+                  <>
+                    {" "}
+                    Personal values are checked for owner{" "}
+                    <span className="font-mono">{vaultUserId}</span>, then your Vault.
+                  </>
+                )}
               </p>
+              {reusableVaultKeys(storedKeyEntries, form.vault_keys).length > 0 && (
+                <div className="grid gap-1 rounded-md border border-border bg-muted/20 p-2">
+                  <div className="text-[11px] font-medium text-muted-foreground">
+                    Attach Existing
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {reusableVaultKeys(storedKeyEntries, form.vault_keys).map((entry) => (
+                      <Button
+                        key={`${entry.scope}:${entry.key}`}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 max-w-full justify-start gap-1.5 px-2"
+                        onClick={() => attachVaultKey(entry.key)}
+                      >
+                        <Plus className="size-3" />
+                        <span className="truncate font-mono text-xs">{entry.key}</span>
+                        <Badge variant="secondary" className="text-[9px]">
+                          {entry.scope}
+                        </Badge>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex gap-2">
                 <Input
                   value={vaultKeyInput}
@@ -622,7 +671,7 @@ export default function AgentsPage() {
               {form.vault_keys.length > 0 && (
                 <div className="rounded-md border border-border divide-y divide-border">
                   {form.vault_keys.map((k) => {
-                    const entry = storedKeyEntries.find((x) => x.key === k);
+                    const entry = findVaultEntry(k, storedKeyEntries);
                     const isSet = !!entry;
                     const badgeLabel = isSet
                       ? entry.scope === "global"
@@ -658,7 +707,8 @@ export default function AgentsPage() {
                           size="sm"
                           className="h-7 px-2"
                           onClick={() => removeVaultKey(k)}
-                          aria-label={`Remove ${k}`}
+                          aria-label={`Detach ${k}`}
+                          title="Detach from agent"
                         >
                           <X className="size-3.5" />
                         </Button>
@@ -782,4 +832,51 @@ function runtimeOptions(runtimes: AgentRuntime[]): AgentRuntime[] {
       connected: false,
     },
   ];
+}
+
+function vaultKeySignature(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function canonicalVaultKey(value: string, entries: VaultKeyEntry[]): string {
+  const key = value.trim();
+  if (!key) return "";
+  return findVaultEntry(key, entries)?.key ?? key;
+}
+
+function findVaultEntry(key: string, entries: VaultKeyEntry[]): VaultKeyEntry | undefined {
+  const signature = vaultKeySignature(key);
+  return preferredVaultEntries(entries).find(
+    (entry) => vaultKeySignature(entry.key) === signature,
+  );
+}
+
+function reusableVaultKeys(
+  entries: VaultKeyEntry[],
+  attachedKeys: string[],
+): VaultKeyEntry[] {
+  const attached = new Set(attachedKeys.map(vaultKeySignature));
+  return preferredVaultEntries(entries).filter(
+    (entry) => !attached.has(vaultKeySignature(entry.key)),
+  );
+}
+
+function preferredVaultEntries(entries: VaultKeyEntry[]): VaultKeyEntry[] {
+  const byKey = new Map<string, VaultKeyEntry>();
+  for (const entry of entries) {
+    const signature = vaultKeySignature(entry.key);
+    const current = byKey.get(signature);
+    if (!current || vaultEntryRank(entry) < vaultEntryRank(current)) {
+      byKey.set(signature, entry);
+    }
+  }
+  return [...byKey.values()].sort(
+    (a, b) => vaultEntryRank(a) - vaultEntryRank(b) || a.key.localeCompare(b.key),
+  );
+}
+
+function vaultEntryRank(entry: VaultKeyEntry): number {
+  if (entry.scope === "personal") return 0;
+  if (entry.scope === "global") return 1;
+  return 2;
 }

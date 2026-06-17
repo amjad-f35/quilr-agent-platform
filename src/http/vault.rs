@@ -150,7 +150,9 @@ pub async fn list_global(
             owner_id,
             CAST(EXTRACT(EPOCH FROM updated_at) * 1000 AS BIGINT) AS updated_at_ms
         FROM "LiteLLM_CredentialsTable"
-        WHERE scope = 'global' AND credential_name NOT LIKE 'provider:%'
+        WHERE scope = 'global'
+          AND credential_name NOT LIKE 'provider:%'
+          AND credential_name NOT LIKE 'anthropic-managed-agent-%'
         ORDER BY credential_name ASC
         "#,
     )

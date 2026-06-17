@@ -941,7 +941,7 @@ export async function resolveInboxItem(id: string, note?: string): Promise<void>
 //   "personal" — stored under the current user's namespace (default)
 //   "global"   — admin-managed keys visible to all users
 
-const VAULT_USER = "local";
+export const DEFAULT_VAULT_USER = "local";
 const VAULT_FALLBACK_PREFIX = "lite-harness-integration:";
 
 function fallbackSet(key: string, value: string): void {
@@ -995,7 +995,7 @@ export async function saveIntegrationKey(
     return "vault";
   }
   try {
-    const res = await req(`/api/vault/${VAULT_USER}`, {
+    const res = await req(`/api/vault/${DEFAULT_VAULT_USER}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ key: envKey, value, scope }),
@@ -1031,7 +1031,7 @@ export async function deleteIntegrationKey(
     const endpoint =
       scope === "global"
         ? `/api/vault/global/${encodeURIComponent(envKey)}`
-        : `/api/vault/${VAULT_USER}/${encodeURIComponent(envKey)}`;
+        : `/api/vault/${DEFAULT_VAULT_USER}/${encodeURIComponent(envKey)}`;
     await req(endpoint, { method: "DELETE" });
   } catch {
     /* noop */
@@ -1043,7 +1043,7 @@ export async function deleteIntegrationKey(
 export async function listIntegrationKeys(): Promise<string[]> {
   const keys = new Set<string>(fallbackList());
   try {
-    const res = await req(`/api/vault/${VAULT_USER}`);
+    const res = await req(`/api/vault/${DEFAULT_VAULT_USER}`);
     if (res.ok) {
       const data = (await res.json()) as { keys?: { key: string }[] };
       for (const k of data.keys ?? []) keys.add(k.key);
@@ -1057,8 +1057,9 @@ export async function listIntegrationKeys(): Promise<string[]> {
 // VaultKeyEntry is defined in types.ts
 export type { VaultKeyEntry } from "./types";
 
-/** List all vault keys with metadata for the current user (personal + global). */
-export async function listVaultKeys(): Promise<VaultKeyEntry[]> {
+/** List all vault keys with metadata available to a user. */
+export async function listVaultKeysForUser(userId = DEFAULT_VAULT_USER): Promise<VaultKeyEntry[]> {
+  const requestedUser = userId.trim() || DEFAULT_VAULT_USER;
   const fallback: VaultKeyEntry[] = fallbackList().map((k) => ({
     key: k,
     scope: "personal" as const,
@@ -1067,11 +1068,17 @@ export async function listVaultKeys(): Promise<VaultKeyEntry[]> {
     fallback.map((e) => [`${e.scope}:${e.key}`, e]),
   );
   try {
-    const [personalRes, globalRes] = await Promise.all([
-      req(`/api/vault/${VAULT_USER}`).catch(() => null),
+    const localPersonalRes = req(`/api/vault/${DEFAULT_VAULT_USER}`).catch(() => null);
+    const ownerPersonalRes =
+      requestedUser === DEFAULT_VAULT_USER
+        ? Promise.resolve(null)
+        : req(`/api/vault/${encodeURIComponent(requestedUser)}`).catch(() => null);
+    const [localRes, ownerRes, globalRes] = await Promise.all([
+      localPersonalRes,
+      ownerPersonalRes,
       req(`/api/vault/global`).catch(() => null),
     ]);
-    for (const res of [personalRes, globalRes]) {
+    for (const res of [localRes, ownerRes, globalRes]) {
       if (res?.ok) {
         const data = (await res.json()) as { keys?: VaultKeyEntry[] };
         for (const k of data.keys ?? []) {
@@ -1084,6 +1091,10 @@ export async function listVaultKeys(): Promise<VaultKeyEntry[]> {
     /* vault unavailable — sessionStorage only */
   }
   return [...byKey.values()];
+}
+
+export async function listVaultKeys(): Promise<VaultKeyEntry[]> {
+  return listVaultKeysForUser(DEFAULT_VAULT_USER);
 }
 
 // ── MCP Server Registry ───────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ pub async fn exercise_claude_gateway_mcp_vault(fixture: &AppFixture) {
     let anthropic = mock_anthropic_runtime().await;
     save_anthropic_credentials(fixture, &anthropic).await;
     let agent_id = create_gmail_agent(fixture).await;
+    save_agent_vault_key(fixture).await;
 
     create_idle_runtime_session(fixture, &agent_id, "first").await;
     create_idle_runtime_session(fixture, &agent_id, "second").await;
@@ -18,7 +19,7 @@ pub async fn exercise_claude_gateway_mcp_vault(fixture: &AppFixture) {
     let agent_bodies = request_bodies(&requests, "/v1/agents");
     assert_eq!(agent_bodies.len(), 2);
     assert_agent_mcp_body(&agent_bodies[0]);
-    assert_vault_credential(&requests);
+    assert_vault_credentials(&requests);
     assert_sessions_reuse_vault(&requests);
 }
 
@@ -43,6 +44,20 @@ async fn create_gmail_agent(fixture: &AppFixture) -> String {
     agent["id"].as_str().unwrap().to_owned()
 }
 
+async fn save_agent_vault_key(fixture: &AppFixture) {
+    request_json(
+        fixture.app.clone(),
+        "POST",
+        "/api/vault/local",
+        Some(json!({
+            "key": "BROWSER_USE_API_KEY",
+            "value": "browser-use-secret",
+            "scope": "personal"
+        })),
+    )
+    .await;
+}
+
 fn gmail_agent_body() -> Value {
     json!({
         "name": "gmail-vault-agent",
@@ -50,6 +65,7 @@ fn gmail_agent_body() -> Value {
         "runtime": "claude_managed_agents",
         "model": "claude-sonnet-4-6",
         "system": "Use Gmail MCP tools.",
+        "vault_keys": ["BROWSER_USE_API_KEY"],
         "tools": [{ "type": "mcp_toolset", "mcp_server_name": "mcp_gmail" }],
         "config": {
             "runtime": "claude_managed_agents",
@@ -95,20 +111,28 @@ fn assert_agent_mcp_body(body: &Value) {
     );
 }
 
-fn assert_vault_credential(requests: &[wiremock::Request]) {
+fn assert_vault_credentials(requests: &[wiremock::Request]) {
     let credential_bodies = request_bodies(
         requests,
         "/v1/vaults/vault_111111111111111111111111/credentials",
     );
-    assert_eq!(credential_bodies.len(), 1);
-    assert_eq!(
-        credential_bodies[0]["auth"],
-        json!({
-            "type": "static_bearer",
-            "mcp_server_url": "http://localhost/mcp_gmail/mcp",
-            "token": "sk-local"
-        })
-    );
+    assert_eq!(credential_bodies.len(), 2);
+    assert!(credential_bodies.iter().any(|body| {
+        body["auth"]
+            == json!({
+                "type": "static_bearer",
+                "mcp_server_url": "http://localhost/mcp_gmail/mcp",
+                "token": "sk-local"
+            })
+    }));
+    assert!(credential_bodies.iter().any(|body| {
+        body["auth"]
+            == json!({
+                "type": "environment_variable",
+                "secret_name": "BROWSER_USE_API_KEY",
+                "secret_value": "browser-use-secret"
+            })
+    }));
 }
 
 fn assert_sessions_reuse_vault(requests: &[wiremock::Request]) {

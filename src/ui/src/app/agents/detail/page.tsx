@@ -26,7 +26,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { VaultCredentialsEditor } from "@/components/vault-credentials-editor";
 import {
+  DEFAULT_VAULT_USER,
   deleteAgent,
   deleteMemory,
   downloadAgentFile,
@@ -34,10 +36,19 @@ import {
   listAgentFiles,
   listMemory,
   listSessions,
+  listVaultKeysForUser,
   storeMemory,
+  updateAgent,
 } from "@/lib/api";
 import { scheduleLabel } from "@/lib/schedule";
-import type { Agent, AgentFile, AgentRuntimeId, Memory, OpencodeSession } from "@/lib/types";
+import type {
+  Agent,
+  AgentFile,
+  AgentRuntimeId,
+  Memory,
+  OpencodeSession,
+  VaultKeyEntry,
+} from "@/lib/types";
 
 function timeAgo(ms: number): string {
   const diff = Date.now() - ms;
@@ -93,6 +104,16 @@ function runtimeFromAgent(agent: Agent): string {
   return "claude_managed_agents";
 }
 
+function vaultUserFromAgent(agent: Agent): string {
+  return agent.owner_id?.trim() || DEFAULT_VAULT_USER;
+}
+
+function vaultKeysFromAgent(agent: Agent | null): string[] {
+  return Array.isArray(agent?.vault_keys)
+    ? agent.vault_keys.filter((key): key is string => typeof key === "string")
+    : [];
+}
+
 function fileNameFromPath(filePath: string): string {
   return filePath.split("/").filter(Boolean).at(-1) || "agent-file";
 }
@@ -111,6 +132,8 @@ function AgentDetail() {
   const [fileQuery, setFileQuery] = useState("");
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [storedKeyEntries, setStoredKeyEntries] = useState<VaultKeyEntry[]>([]);
+  const [vaultUserId, setVaultUserId] = useState(DEFAULT_VAULT_USER);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryQuery, setMemoryQuery] = useState("");
   const [memoryFilter, setMemoryFilter] = useState<MemoryFilter>("all");
@@ -151,16 +174,20 @@ function AgentDetail() {
     if (!id) return;
     (async () => {
       try {
-        const [ag, allSessions, memoryRows, fileRows] = await Promise.all([
-          getAgent(id),
+        const ag = await getAgent(id);
+        const owner = vaultUserFromAgent(ag);
+        const [allSessions, memoryRows, fileRows, keyRows] = await Promise.all([
           listSessions().catch(() => []),
           listMemory(id).catch(() => []),
           listAgentFiles(id).catch(() => []),
+          listVaultKeysForUser(owner).catch(() => []),
         ]);
+        setVaultUserId(owner);
         setAgent(ag);
         setSessions(allSessions.filter((s) => s.agent_id === id || s.agent === id || s.harness === id));
         setMemories(memoryRows);
         setFiles(fileRows);
+        setStoredKeyEntries(keyRows);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -228,6 +255,12 @@ function AgentDetail() {
     } finally {
       setDownloadingPath(null);
     }
+  };
+
+  const updateVaultKeys = async (vaultKeys: string[]) => {
+    if (!agent) return;
+    const updated = await updateAgent(id, { vault_keys: vaultKeys });
+    setAgent(updated);
   };
 
   const toggleSelected = (key: string) => {
@@ -470,6 +503,14 @@ function AgentDetail() {
                     </dl>
                   </Card>
                 </section>
+
+                <VaultCredentialsEditor
+                  vaultKeys={vaultKeysFromAgent(agent)}
+                  storedKeyEntries={storedKeyEntries}
+                  vaultUserId={vaultUserId}
+                  onVaultKeysChange={updateVaultKeys}
+                  onStoredKeyEntriesChange={(updater) => setStoredKeyEntries(updater)}
+                />
 
                 <section>
                   <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

@@ -5,7 +5,8 @@ use crate::errors::GatewayError;
 
 pub use super::vault_keys::VaultKeyRow;
 pub use super::vault_keys::{
-    delete_vault_key, list_vault_keys_for_user, resolve_vault_key, upsert_vault_key,
+    delete_vault_key, list_vault_keys_for_user, resolve_global_vault_key,
+    resolve_personal_vault_key, resolve_vault_key, upsert_vault_key,
 };
 
 #[derive(Debug, Clone, FromRow)]

@@ -18,10 +18,12 @@ import {
   Loader2,
   Mail,
   Plug,
+  Plus,
   Search,
   ShieldCheck,
   Sparkles,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -1003,6 +1005,7 @@ function AgentDraftControls({
     draft.tools.map((tool) => tool.type).filter(Boolean);
   const selectedTools = new Set(draft.tools.map((tool) => tool.type).filter(Boolean));
   const selectedSubAgents = new Set(draft.sub_agents.map((agent) => agent.agent_id));
+  const [vaultKeyInput, setVaultKeyInput] = useState("");
   const setTool = (toolId: string, enabled: boolean) => {
     const next = new Set(selectedTools);
     if (enabled) next.add(toolId);
@@ -1029,6 +1032,12 @@ function AgentDraftControls({
         ? Array.from(new Set([...draft.mcp_server_ids, integrationId]))
         : draft.mcp_server_ids.filter((id) => id !== integrationId),
     });
+  };
+  const addVaultKey = () => {
+    const key = vaultKeyInput.trim();
+    if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return;
+    update({ vault_keys: Array.from(new Set([...draft.vault_keys, key])) });
+    setVaultKeyInput("");
   };
 
   return (
@@ -1132,6 +1141,71 @@ function AgentDraftControls({
             timezone={draft.timezone}
             onChange={(schedule) => update(schedule)}
           />
+        </div>
+
+        <div className="grid gap-2 rounded-md border border-white/10 bg-black/10 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="grid gap-1">
+              <Label className="text-sm font-medium">Vault Credentials</Label>
+              <p className="max-w-xl text-xs leading-5 text-muted-foreground">
+                Attach secret names now, then save their values from the agent detail page.
+              </p>
+            </div>
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {draft.vault_keys.length} attached
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={vaultKeyInput}
+              onChange={(event) => setVaultKeyInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addVaultKey();
+                }
+              }}
+              placeholder="BROWSER_USE_API_KEY"
+              className="border-white/10 bg-white/5 font-mono text-xs"
+              aria-label="Vault credential name"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={addVaultKey}
+              disabled={!vaultKeyInput.trim()}
+              className="border-white/10 bg-white/5 hover:bg-white/10"
+            >
+              <Plus className="size-3.5" />
+              Add Key
+            </Button>
+          </div>
+          {draft.vault_keys.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No vault credentials attached.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {draft.vault_keys.map((key) => (
+                <span
+                  key={key}
+                  className="inline-flex max-w-full items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1"
+                >
+                  <KeyRound className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="truncate font-mono text-xs">{key}</span>
+                  <button
+                    type="button"
+                    className="rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    onClick={() =>
+                      update({ vault_keys: draft.vault_keys.filter((value) => value !== key) })
+                    }
+                    aria-label={`Remove ${key}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="grid gap-2 rounded-md border border-white/10 bg-black/10 p-3 text-[#f7f2e8]">
