@@ -188,8 +188,10 @@ impl<'a> SlackReply<'a> {
         if let Some(text) = self.persisted_text().await? {
             return self.finish_with_text(text).await.map(|()| true);
         }
-        let message = properties.get("error")
-            .and_then(|e| e.get("message")).and_then(Value::as_str)
+        let message = properties
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(Value::as_str)
             .unwrap_or("Agent run failed.");
         self.replace_text(message).await?;
         Ok(true)
@@ -218,8 +220,7 @@ impl<'a> SlackReply<'a> {
 
     async fn finish_if_terminal(&mut self) -> Result<bool, GatewayError> {
         if let Some(text) = self.persisted_text().await? {
-            self.finish_with_text(text).await?;
-            return Ok(true);
+            return self.finish_with_text(text).await.map(|()| true);
         }
         let Some(run) = self.state.agent_runs.get_run(self.session_id) else {
             return Ok(false);
