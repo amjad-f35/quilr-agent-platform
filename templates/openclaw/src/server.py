@@ -1,7 +1,9 @@
 import json
 import os
 import queue
+import shlex
 import sqlite3
+import subprocess
 import threading
 import time
 import uuid
@@ -25,6 +27,8 @@ OPENCLAW_API_KEY = (
     or ""
 )
 OPENCLAW_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("OPENCLAW_REQUEST_TIMEOUT_SECONDS", "600"))
+OPENCLAW_MCP_RELOAD_TIMEOUT_SECONDS = float(os.environ.get("OPENCLAW_MCP_RELOAD_TIMEOUT_SECONDS", "15"))
+OPENCLAW_MCP_RELOAD_COMMAND = os.environ.get("OPENCLAW_MCP_RELOAD_COMMAND", "openclaw mcp reload")
 RUNTIME_API_KEY = os.environ.get("RUNTIME_API_KEY")
 OPENCLAW_CONFIG_PATH = os.environ.get(
     "OPENCLAW_CONFIG_PATH",
@@ -250,6 +254,10 @@ def write_json_file(path: Path, value: Any) -> None:
     os.replace(tmp, path)
 
 
+def stable_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 def stored_managed_mcp_names(config: dict[str, Any]) -> set[str]:
     bridge_config = config.get(BRIDGE_CONFIG_KEY)
     if isinstance(bridge_config, dict):
@@ -391,6 +399,11 @@ def ensure_mcp_tool_policy(config: dict[str, Any], has_mcp_servers: bool) -> Non
     tools = config.setdefault("tools", {})
     if not isinstance(tools, dict):
         return
+    allow = tools.get("allow")
+    if allow is None:
+        tools["allow"] = ["group:openclaw", "bundle-mcp"]
+    elif isinstance(allow, list) and "bundle-mcp" not in allow:
+        allow.append("bundle-mcp")
     sandbox = tools.setdefault("sandbox", {})
     if not isinstance(sandbox, dict):
         return
@@ -402,11 +415,29 @@ def ensure_mcp_tool_policy(config: dict[str, Any], has_mcp_servers: bool) -> Non
         also_allow.append("bundle-mcp")
 
 
+def reload_openclaw_mcp_config() -> None:
+    command = OPENCLAW_MCP_RELOAD_COMMAND.strip()
+    if not command or command == "0":
+        return
+    try:
+        subprocess.run(
+            shlex.split(command),
+            check=True,
+            timeout=OPENCLAW_MCP_RELOAD_TIMEOUT_SECONDS,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as exc:
+        print(f"OpenClaw MCP reload failed: {exc}", flush=True)
+
+
 def sync_openclaw_mcp_config(agent_row: sqlite3.Row) -> None:
     with config_lock:
         desired = agent_mcp_servers(agent_row)
         config_path = openclaw_config_path()
         config = read_openclaw_config(config_path)
+        before = stable_json(config)
         mcp = config.setdefault("mcp", {})
         if not isinstance(mcp, dict):
             raise RuntimeError("OpenClaw config mcp must be an object")
@@ -429,7 +460,9 @@ def sync_openclaw_mcp_config(agent_row: sqlite3.Row) -> None:
             managed_names.add(name)
         store_managed_mcp_names(config, managed_names)
         ensure_mcp_tool_policy(config, bool(desired))
-        write_json_file(config_path, config)
+        if stable_json(config) != before:
+            write_json_file(config_path, config)
+            reload_openclaw_mcp_config()
 
 
 def row_to_agent(row: sqlite3.Row) -> dict[str, Any]:
