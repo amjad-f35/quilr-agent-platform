@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState, useEffect, FormEvent } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -64,8 +65,8 @@ function LoginForm() {
       >
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-2xl leading-none">🚄</span>
-            <span className="font-semibold">LiteLLM</span>
+            <Image src="/quilr-logo.png" alt="Quilr" width={28} height={28} />
+            <span className="font-semibold">Quilr</span>
           </div>
           <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
           <p className="text-sm text-muted-foreground">

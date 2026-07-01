@@ -55,7 +55,7 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.145 0 0);
+  --primary: oklch(0.627 0.194 149.214);
   --primary-foreground: #ffffff;
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -84,40 +84,39 @@
 }
 
 .dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-  --card: #111111;
-  --card-foreground: #ededed;
-  --popover: #141414;
-  --popover-foreground: #ededed;
-  /* Primary stays neutral (white-on-black). Green is reserved for status
-     indicators (ready dots, success-only accents) — not for chrome. */
-  --primary: #ededed;
-  --primary-foreground: #0a0a0a;
-  --secondary: #1a1a1a;
-  --secondary-foreground: #ededed;
-  --muted: #161616;
-  --muted-foreground: #888888;
-  --accent: #1f1f1f;
-  --accent-foreground: #ededed;
+  --background: #0a0f0c;
+  --foreground: #e8f0eb;
+  --card: #101613;
+  --card-foreground: #e8f0eb;
+  --popover: #121a15;
+  --popover-foreground: #e8f0eb;
+  /* Quilr brand: green primary on near-black. */
+  --primary: #22c55e;
+  --primary-foreground: #04120a;
+  --secondary: #16211b;
+  --secondary-foreground: #e8f0eb;
+  --muted: #131c16;
+  --muted-foreground: #85958c;
+  --accent: #16241c;
+  --accent-foreground: #a7f3c4;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --border: #1f1f1f;
-  --input: #1f1f1f;
-  --ring: #2a2a2a;
-  --chart-1: #ededed;
-  --chart-2: #2563eb;
+  --border: #1c2a21;
+  --input: #1c2a21;
+  --ring: #22c55e;
+  --chart-1: #22c55e;
+  --chart-2: #14b8a6;
   --chart-3: #f59e0b;
   --chart-4: #ef4444;
   --chart-5: #a855f7;
-  --sidebar: #0d0d0d;
-  --sidebar-foreground: #ededed;
-  --sidebar-primary: #ededed;
-  --sidebar-primary-foreground: #0a0a0a;
-  --sidebar-accent: #1a1a1a;
-  --sidebar-accent-foreground: #ededed;
-  --sidebar-border: #1f1f1f;
-  --sidebar-ring: #2a2a2a;
+  --sidebar: #0c120e;
+  --sidebar-foreground: #e8f0eb;
+  --sidebar-primary: #22c55e;
+  --sidebar-primary-foreground: #04120a;
+  --sidebar-accent: #16211b;
+  --sidebar-accent-foreground: #a7f3c4;
+  --sidebar-border: #1c2a21;
+  --sidebar-ring: #22c55e;
 }
 
 .dark body {

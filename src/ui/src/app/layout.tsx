@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LiteLLM AI Gateway",
-  description: "LiteLLM AI Gateway console",
+  title: "Quilr AI Platform",
+  description: "Quilr's AI building platform — agents, gateways, and governance in one place",
 };
 
 // Runs synchronously before React hydration — reads ?token= from URL,
@@ -48,8 +48,7 @@ export default function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="light"
-          enableSystem
+          defaultTheme="dark"
           disableTransitionOnChange
         >
           <a

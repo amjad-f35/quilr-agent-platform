@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, FormEvent } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Check, KeyRound } from "lucide-react";
 
@@ -114,8 +115,8 @@ export default function OnboardingPage() {
     <div className="min-h-dvh flex items-center justify-center px-4 bg-background text-foreground">
       <div className="w-full max-w-sm flex flex-col gap-6">
         <div className="flex items-center gap-2">
-          <span className="text-2xl leading-none">🚄</span>
-          <span className="font-semibold text-lg">LiteLLM Agent Platform</span>
+          <Image src="/quilr-logo.png" alt="Quilr" width={30} height={30} />
+          <span className="font-semibold text-lg">Quilr AI Platform</span>
         </div>
 
         {step !== "checking" && <Steps current={step} />}

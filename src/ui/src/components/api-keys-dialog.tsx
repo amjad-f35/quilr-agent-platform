@@ -246,7 +246,7 @@ function CreatedKeyCard({ created }: { created: CreatedGatewayApiKey }) {
   const origin = typeof window === "undefined" ? "http://127.0.0.1:4000" : window.location.origin;
   const claudeCommand = `lite claude --url "${origin}" --key "${created.key}"`;
   const codexCommand = `lite codex --url "${origin}" --key "${created.key}"`;
-  const agentPrompt = `You have access to LiteLLM's Rust AI gateway at ${origin}. Ask the user for a LiteLLM API key if you need to make authenticated calls.
+  const agentPrompt = `You have access to Quilr's AI gateway at ${origin}. Ask the user for a Quilr API key if you need to make authenticated calls.
 
 Start by checking what you can access:
 - Providers and model IDs: GET ${origin}/v1/models

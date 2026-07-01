@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -234,6 +235,19 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
 
   return (
     <aside className="flex h-screen w-16 shrink-0 flex-col border-r border-border bg-background sm:w-64">
+      <div className="flex h-12 items-center justify-center gap-2 border-b border-border px-2 sm:justify-start sm:px-3">
+        <Image
+          src="/quilr-logo.png"
+          alt="Quilr"
+          width={26}
+          height={26}
+          className="shrink-0"
+        />
+        <span className="hidden text-sm font-semibold tracking-tight sm:block">
+          Quilr <span className="text-muted-foreground font-normal">AI Platform</span>
+        </span>
+      </div>
+
       <div className="flex h-12 items-center border-b border-border px-2 sm:px-3">
         <ProductSwitcher
           current={currentSection}

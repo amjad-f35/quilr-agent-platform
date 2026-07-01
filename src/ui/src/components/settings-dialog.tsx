@@ -46,14 +46,14 @@ export function SettingsDialog() {
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            LiteLLM gateway connection. Configure via env vars on the server.
+            Quilr gateway connection. Configure via env vars on the server.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           <div>
             <div className="text-xs font-medium text-muted-foreground mb-2">
-              LiteLLM gateway
+              Quilr gateway
             </div>
             <div className="rounded border border-border p-3 space-y-2">
               <div className="flex items-center justify-between gap-3">

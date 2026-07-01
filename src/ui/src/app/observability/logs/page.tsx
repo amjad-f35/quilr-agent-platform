@@ -106,7 +106,7 @@ function errorInfo(log: SpendLog | null): Record<string, unknown> | null {
 
 function buildDebugPrompt(log: SpendLog, error: Record<string, unknown> | null): string {
   const lines = [
-    "Debug this LiteLLM gateway request log and identify the likely root cause.",
+    "Debug this Quilr gateway request log and identify the likely root cause.",
     "",
     `Log URL: ${currentLogUrl(log.request_id)}`,
     `Request ID: ${log.request_id}`,
