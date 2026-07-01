@@ -101,7 +101,12 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
 export function getStoredMasterKey(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.sessionStorage.getItem(MASTER_KEY_STORAGE);
+    // localStorage keeps the key across tabs/restarts; fall back to
+    // sessionStorage for keys stored before this change.
+    return (
+      window.localStorage.getItem(MASTER_KEY_STORAGE) ??
+      window.sessionStorage.getItem(MASTER_KEY_STORAGE)
+    );
   } catch {
     return null;
   }
@@ -110,7 +115,7 @@ export function getStoredMasterKey(): string | null {
 export function setStoredMasterKey(key: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(MASTER_KEY_STORAGE, key);
+    window.localStorage.setItem(MASTER_KEY_STORAGE, key);
   } catch {
     /* noop */
   }
@@ -119,6 +124,7 @@ export function setStoredMasterKey(key: string): void {
 export function clearStoredMasterKey(): void {
   if (typeof window === "undefined") return;
   try {
+    window.localStorage.removeItem(MASTER_KEY_STORAGE);
     window.sessionStorage.removeItem(MASTER_KEY_STORAGE);
   } catch {
     /* noop */

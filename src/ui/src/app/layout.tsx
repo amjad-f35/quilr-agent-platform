@@ -27,7 +27,7 @@ const tokenBootstrap = `(function(){
     var p = new URLSearchParams(window.location.search);
     var t = p.get('token');
     if (t) {
-      sessionStorage.setItem('lite-harness-master-key', t);
+      localStorage.setItem('lite-harness-master-key', t);
       p.delete('token');
       var qs = p.toString();
       history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
